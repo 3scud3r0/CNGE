@@ -3,7 +3,7 @@ Each FILE section contains the original text of one tracked project file.
 
 ================================================================================
 FILE: .github/workflows/ci.yml
-SHA256: 21c3b356234f7741aca9c551eec3c9b9f3e5cee6a2576dadb987872b9764a863
+SHA256: 811694769ad2ed598bb8d2e8641e05b174525d483b7ee7ea44cb89f9c916e7ee
 ================================================================================
 name: Validate CNGE
 on: [push, pull_request]
@@ -12,6 +12,8 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      OPENBLAS_NUM_THREADS: 1
     strategy:
       matrix:
         python-version: ['3.11', '3.12']
@@ -22,10 +24,11 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: python -m pip install -e '.[dev]'
-      - run: ruff check cnge_engine tests tools
-      - run: ruff format --check cnge_engine tests tools
+      - run: ruff check cnge_engine cnge_v2 tests tools
+      - run: ruff format --check cnge_engine cnge_v2 tests tools
       - run: pytest -q
       - run: cnge-demo --steps 1000
+      - run: cnge-v2-demo --steps 10
       - run: python -m build
       - run: python tools/export_source.py --output /tmp/CNGE_SOURCE.txt && cmp CNGE_SOURCE.txt /tmp/CNGE_SOURCE.txt
 
@@ -45,7 +48,7 @@ artifacts/
 
 ================================================================================
 FILE: MANIFEST.in
-SHA256: c571a6a537d0db2a4967c5f891ce01d42efa800b91c8b883d79dd23d550dc226
+SHA256: a63f32bf20591d6fbbab43e84b8e421b1543082523538cccda5e19783f7bda0c
 ================================================================================
 include README.md pyproject.toml CNGE_SOURCE.txt
 recursive-include docs *.md *.txt
@@ -53,20 +56,21 @@ recursive-include tests *.py
 recursive-include tools *.py *.cjs
 recursive-include web *.html
 recursive-include .github *.yml
+recursive-include cnge_v2/verification *.py
 
 ================================================================================
 FILE: README.md
-SHA256: 903d256ca706ba2a18770e22d08468c88b8c9fbc38a210c2722efdfbd7977e44
+SHA256: 913e880481c1167d044b8bc74870e6e2e13ae09434f3bd539663ab1d168f9e9b
 ================================================================================
-# CNGE — Continuous Neuro-Geometric Epistemic Engine
+# CNGE-v2 — Robust continuous geometric discovery
 
-Implementação de referência executável da arquitetura neurogeométrica do anexo, em Python/PyTorch. Inclui os 22 módulos especificados, testes, demonstração científica, runtime de aprendizado online, transporte WebSocket e uma interface de inspeção em canvas.
+O fluxo recomendado agora usa **autoencoder diferencial + EKF**, **gauge escalar normalizado**, **dicionários funcionais + STLSQ** e **adaptadores LoRA com proteção de ativações ou roteamento por tarefa**. O pacote `cnge_v2/` contém todos os módulos da especificação v2, pipeline, checkpoints, demonstração e testes.
 
-**Estado:** pesquisa/desenvolvimento. As metas de descoberta autônoma geral, retenção perfeita, prova física, desempenho GPU e operação de produção ainda não estão demonstradas. Consulte [limites e correspondência com o pedido](docs/VALIDATION.md).
+As fórmulas do pedido exigiram correções: `uᵀJu=0` não define uma norma, imagens de posição isoladas não identificam momento e subespaços finitos podem saturar. [Contratos, demonstrações e limites](docs/V2_VALIDATION.md) explicam exatamente o que o código garante e o que foi medido. O estado é pesquisa/desenvolvimento validado em CPU, sem alegar garantias universais de produção ou descoberta científica.
 
-## Instalação
+## Instalar
 
-Python 3.11+ (validado localmente com Python 3.12). CPU não requer GPU, câmera, serviços externos ou credenciais:
+Python 3.11+ (validação local: Python 3.12). Use o checkout existente: cada tarefa cloud já é isolada, sem necessidade de worktree.
 
 ```bash
 cd /workspace/CNGE
@@ -76,79 +80,78 @@ python -m venv .venv
 .venv/bin/python -m pip check
 ```
 
-Em uma máquina CUDA, instale primeiro a distribuição de PyTorch adequada ao driver usando as instruções oficiais do PyTorch, e selecione `EngineConfig(device="cuda")`. Não presuma disponibilidade de GPU. Cada tarefa cloud já é isolada: use o checkout existente, sem criar worktrees.
+O PyTorch CPU está explícito para evitar baixar distribuições CUDA sem necessidade. Para GPU, instale o PyTorch adequado ao driver conforme a documentação oficial e configure `device="cuda"`. Nenhum serviço externo ou segredo é necessário para o v2.
 
-## Executar e verificar
+## Executar e validar
 
 ```bash
-.venv/bin/cnge-demo --steps 1000 --output artifacts/demo.json
-.venv/bin/pytest -q
-.venv/bin/pytest --long -m long -q  # três testes de 50.000 passos; cerca de 14 minutos nesta CPU
-.venv/bin/ruff check cnge_engine tests tools
-.venv/bin/ruff format --check cnge_engine tests tools
+OPENBLAS_NUM_THREADS=1 .venv/bin/python -m cnge_v2.demo --output artifacts/v2-demo.json
+OPENBLAS_NUM_THREADS=1 .venv/bin/pytest -q
+.venv/bin/ruff check cnge_engine cnge_v2 tests tools
+.venv/bin/ruff format --check cnge_engine cnge_v2 tests tools
 .venv/bin/python -m build
 ```
 
-A demonstração integra o oscilador harmônico isotrópico 3D, verifica um invariante analítico conhecido, sintetiza `L_z = q_x p_y - q_y p_x`, verifica a expressão em pontos separados e a registra na gramática. O relatório distingue esse exercício de uma descoberta neural autônoma.
+Após instalação, `cnge-v2-demo` é equivalente ao módulo. A demonstração calibra coordenadas em telemetria ruidosa, executa ingestão → EKF → atualização LoRA → mineração e, separadamente, destila Runge–Lenz em cinco termos. Não apresenta o alvo analítico como uma descoberta neural autônoma.
 
-## Interface e aprendizado online
+A suíte normal inclui testes do v1 e v2. Três testes históricos de 50.000 passos exigem `pytest --long -m long -q`; a execução anterior levou cerca de 14 minutos. O v2 compartilha o mesmo midpoint validado, sem fallback Euler/RK4. [Resultados atuais](docs/V2_RESULTS.md) distinguem verificações atuais e históricas.
 
-```bash
-.venv/bin/python tools/live_demo.py
-# Execução finita, útil para smoke test:
-.venv/bin/python tools/live_demo.py --steps 100
-```
-
-O processo inicia HTTP na porta 8081 e WebSocket na 8080, ambos em loopback. Para acesso local, abra o arquivo servido pelo HTTP no navegador da mesma máquina. A interface mostra `(q₁,q₂,p₁)`, métricas, candidatos e permite perturbações e restrição rotacional xy. Essa é uma projeção visual, não uma transformação simplética em 3D. Os processos não sobrevivem a snapshots: reinicie o comando quando necessário. `Ctrl+C` fecha o runtime e os servidores. Não exponha esse servidor sem autenticação e uma configuração de implantação própria.
-
-Para outros sensores, forneça um iterador assíncrono de coordenadas `[d]` ao método `start_epistemic_runtime(source)` e aguarde a tarefa retornada. `stop()` cancela e coleta tarefas. A fonte deve ter período uniforme `integrator_dt` e massa constante conhecida para que a aproximação `p = m dq/dt` seja apropriada. Uma mudança de coordenadas observada não necessariamente corresponde a um impulso físico.
+## Usar o pipeline
 
 ```python
 import asyncio
-from cnge_engine import EngineConfig
-from cnge_engine.streaming.asynchronous_orchestrator import EpistemicContinuousOrchestrator
+import torch
+from cnge_v2 import V2EngineConfig
+from cnge_v2.execution.streaming_pipeline import StreamingEpistemicPipeline
 
-async def observations():
-    for q in ([1., 0.], [.99995, .01], [.9998, .02]):
-        yield q
-
-async def main():
-    engine = EpistemicContinuousOrchestrator(EngineConfig(spatial_dim=2))
-    try:
-        await engine.start_epistemic_runtime(observations())
-        print(engine.metrics)
-    finally:
-        await engine.stop()
-
-asyncio.run(main())
+async def run(calibration_pairs, sensor):
+    # calibration_pairs: [B, 2, obs_dim], mesmo sensor e passo temporal do stream.
+    engine = StreamingEpistemicPipeline(V2EngineConfig(
+        obs_dim=calibration_pairs.shape[-1], latent_spatial_dim=2,
+        device="cpu", protection_mode="task",
+    ))
+    engine.calibrate(calibration_pairs, steps=100)
+    async for observation in sensor:
+        telemetry = await engine.ingest_sensor_tick(observation)
+        print(telemetry)
+    engine.save_checkpoint("artifacts/model.pt")
+    restored = StreamingEpistemicPipeline.load_checkpoint("artifacts/model.pt", device="cpu")
+    return restored
 ```
 
-O runtime realiza atualização Hamiltoniana por SGD com gradiente projetado, mineração Noether por Adam, replay periódico, verificação empírica e compilação condicional. A mineração e as operações tensoriais são serializadas numa tarefa cooperativa para evitar corridas nos parâmetros; não se afirma execução concorrente em streams CUDA. A busca simbólica pode bloquear brevemente o loop. Eventos externos têm fila limitada e quadros são descartados em favor do mais recente para clientes lentos.
+Calibre com pares de observações igualmente espaçadas, normalizadas e representativas de várias trajetórias/energias. `Q_cov` e `R_cov` precisam refletir as unidades e o ruído do sensor. O encoder não é adaptado silenciosamente depois da calibração: uma mudança de carta invalidaria as garantias dos snapshots anteriores.
 
-### Integrações opcionais
+Para imagens de posição ou sensores sem estado observável em um frame, forme históricos com `ObservationHistory(frame_dim=128, length=4)` e configure `obs_dim=512`; `update(frame)` retorna `None` até preencher a janela, depois retorna o vetor concatenado. Prepare os pares de calibração com as mesmas janelas. Não se supõe que qualquer histórico arbitrário garanta observabilidade.
 
-- **Embeddings:** `pip install -e '.[semantic]'`. `FoundationEmbeddingBridge` carrega um modelo Sentence Transformers explicitamente; o download requer acesso ao Hugging Face e seus hosts de armazenamento. Não ocorre na importação do pacote. O adaptador foi testado com backend injetado; o modelo remoto não foi baixado. A projeção contrastiva precisa de pares científicos rotulados antes de uso semântico significativo.
-- **Câmera:** `pip install -e '.[camera]'`. `ContinuousSensorStream.capture(coordinate_extractor)` requer um dispositivo e uma função que transforme frames em coordenadas físicas calibradas. O código não interpreta pixels como posições ou inventa calibração.
-- **Semântica:** a tradução de restrições suporta explicitamente rotação no plano xy. Prompts arbitrários são rejeitados; a explicação apresenta a expressão e o estado empírico, sem inventar citações ou provas.
+`LiveOrchestrator(engine, capacity=64, callback=...)` coordena um produtor e um worker com fila limitada, backpressure, cancelamento estruturado e propagação de erros. Aguarde `orchestrator.run(async_source)`. Não compartilhe o modelo com atualizações concorrentes fora desse worker.
 
-## Estrutura
+### Aprendizado contínuo
 
-`cnge_engine/` segue a organização do pedido: `config`, `math_core`, `dynamics`, `noether`, `crystallization`, `semantic_bridge`, `streaming` e `visualization`. Os testes ficam em `tests/`; o frontend em `web/`. O pedido original está preservado em [docs/SPECIFICATION.txt](docs/SPECIFICATION.txt).
+- `protection_mode="activation"` é o padrão: protege a união dos subespaços capturados. Uma camada saturada gera `ActivationCapacityError`; expansão de características ou outra política exige uma decisão explícita.
+- `protection_mode="task"` preserva snapshots nomeados e permite novos adaptadores completos. Após treinar um regime, use `engine.consolidate_task("regime_1")`; para inferência antiga, use `with engine.adapters.task("regime_1"):` ao avaliar energia/campo. Essa política requer contexto de tarefa e não promete proteção incondicional do campo ativo.
+- `trigger_symbolic_distillation()` só consolida quando os gates de variância, comutador, R² separado e residual da fórmula passam. Retorna `None` quando não há evidência. Um sistema genérico com um grau de liberdade pode não ter outro invariante independente de H.
 
-## Código-fonte em um único TXT
+Os checkpoints preservam modelos, adaptadores e estados de otimização; filtros, filas e conexões reiniciam. Não recalibre a carta após congelar tarefas. A restauração de pesos não inicia serviços.
 
-[CNGE_SOURCE.txt](CNGE_SOURCE.txt) reúne todos os arquivos de texto versionados (código, testes, interface, configuração e documentação), com caminho e SHA-256 de cada arquivo. É um arquivo de fontes concatenadas, não um executável binário. Recrie-o após alterar os fontes:
+### Síntese analítica
+
+`FunctionalDictionary` suporta monômios de grau limitado, trigonometria, filtros dimensionais/de escala e orçamento máximo de termos. `include_kepler=True` adiciona `q_i/r`, indispensável para Runge–Lenz. `ConstrainedSTLSQ.fit` aceita `constraints=C` para `C ξ=0`; `fit_gradient` ajusta gradientes de funções escalares, sem criar um campo não integrável. A complexidade é polinomial no tamanho explícito da biblioteca, que deve permanecer limitado.
+
+## Código-fonte e distribuição
+
+[CNGE_SOURCE.txt](CNGE_SOURCE.txt) reúne todo o conteúdo textual versionado, com caminhos e SHA-256: ambos os pacotes, testes, frontend, scripts, configuração e documentação. É um arquivo de fontes concatenadas, não um executável Python isolado. Após editar fontes:
 
 ```bash
 git add .
 .venv/bin/python tools/export_source.py
+git add CNGE_SOURCE.txt
 ```
 
-O exportador exclui a si próprio como **saída** (`CNGE_SOURCE.txt`), mas inclui seu script, e não inclui `.venv`, caches, artefatos ou credenciais. A distribuição Python compilada/empacotada fica em `dist/` após `python -m build`.
+O build produz wheel e distribuição de fontes em `dist/`; esta inclui também ferramentas, interface e o TXT. Caches, ambientes virtuais, artefatos e credenciais não são exportados.
 
-### Teste do navegador
+## Compatibilidade v1
 
-Com o servidor de demonstração ativo, execute `node tools/browser_smoke.cjs` em um ambiente com Playwright e Chromium. Se necessário, instale o cliente com `npm install --prefix /tmp/cnge-browser playwright` e use `NODE_PATH=/tmp/cnge-browser/node_modules node tools/browser_smoke.cjs`. `CHROMIUM_PATH` seleciona o executável Chromium instalado. O teste verifica telemetria real, intervenções, erros JavaScript e layout móvel.
+O código `cnge_engine/` permanece disponível para comparação e compatibilidade. Ele não é chamado pelo pipeline v2 para estimar momento, buscar ASTs, minerar com a perda antiga ou projetar gradientes em parâmetros. O v2 reutiliza apenas suas primitivas matemáticas e ativações já verificadas. A interface e integrações opcionais antigas estão documentadas em [LEGACY_V1.md](docs/LEGACY_V1.md); o comando `tools/live_demo.py` continua sendo a demonstração **v1**, não a do pipeline novo.
 
 ================================================================================
 FILE: cnge_engine/__init__.py
@@ -1649,16 +1652,2129 @@ class SymplecticPhaseProjector:
         return points.detach().cpu().numpy()
 
 ================================================================================
-FILE: docs/PULL_REQUEST.md
-SHA256: 8e4a48c3c552d01cd4e6072992a654c2ab0255a3495915661b953fdd9ceb842b
+FILE: cnge_v2/__init__.py
+SHA256: 591dd21f17af0c9d13368e2c92393464f1b8d500510bd0a31a653a79a05c69b4
 ================================================================================
-# Implement CNGE scientific engine and reproducible source archive
+"""Noise-aware canonical dynamics, sparse distillation and task-aware adapters."""
 
-The repository previously contained only a title. This change adds an executable CPU-first reference implementation of the attached Continuous Neuro-Geometric Epistemic Engine architecture: canonical mechanics, differentiable integrators, Hamiltonian/Lagrangian networks, invariant mining, local parameter protection, bounded symbolic synthesis, optional semantic/camera adapters, online learning, and a live canvas with WebSocket interventions.
+from .config.engine_config import V2EngineConfig
+from .manifold.canonical_symplectic import SymplecticStructure
 
-The README provides installation, demos, tests and integration instructions. `docs/VALIDATION.md` maps the implementation to the specification and explicitly distinguishes empirical checks from the unproven research and production guarantees in the original request. The oscillator demo uses a known analytical invariant and does not claim autonomous neural discovery. `CNGE_SOURCE.txt` contains the complete versioned text sources, including tests and documentation, with per-file SHA-256 hashes and a deterministic regeneration script.
+__all__ = ["SymplecticStructure", "V2EngineConfig"]
 
-Validation: see `docs/RESULTS.md` for the executed checks and measured results. Optional GPU, real-camera and downloaded foundation-model integrations are not validated in this environment. The workflow includes CPU CI and reproducible source-export verification.
+__version__ = "0.2.0"
+
+================================================================================
+FILE: cnge_v2/config/__init__.py
+SHA256: ebf72630e97978d646ceeb7aead8dc8986baaf87215fdf3d7ada1e7d2c35de02
+================================================================================
+"""CNGE-v2 config components."""
+
+================================================================================
+FILE: cnge_v2/config/engine_config.py
+SHA256: e6552462149e6f81a616a2830dda744e0579085407a7cbe25815a9f3673b4fb5
+================================================================================
+import math
+from dataclasses import dataclass, field
+
+import torch
+
+
+@dataclass(frozen=True)
+class V2EngineConfig:
+    obs_dim: int
+    latent_spatial_dim: int
+    device: str = field(default_factory=lambda: "cuda" if torch.cuda.is_available() else "cpu")
+    dtype: torch.dtype = torch.float32
+    integrator_dt: float = 0.01
+    integrator_tol: float = 1e-10
+    integrator_max_iter: int = 15
+    stlsq_threshold: float = 0.05
+    stlsq_max_iter: int = 20
+    lora_rank: int = 4
+    noether_orth_weight: float = 5.0
+    noether_norm_weight: float = 10.0
+    learning_rate: float = 1e-3
+    buffer_size: int = 256
+    hidden_dim: int = 64
+    dictionary_degree: int = 3
+    dictionary_max_features: int = 2048
+    process_covariance: float = 1e-5
+    observation_covariance: float = 1e-2
+    min_discovery_variance: float = 0.05
+    max_commutator: float = 1e-4
+    min_discovery_r2: float = 0.999
+    protection_mode: str = "activation"
+
+    def __post_init__(self):
+        for name in (
+            "obs_dim",
+            "latent_spatial_dim",
+            "integrator_max_iter",
+            "stlsq_max_iter",
+            "lora_rank",
+            "buffer_size",
+            "hidden_dim",
+            "dictionary_degree",
+            "dictionary_max_features",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"{name} must be a positive integer")
+        for name in (
+            "integrator_dt",
+            "integrator_tol",
+            "learning_rate",
+            "process_covariance",
+            "observation_covariance",
+            "min_discovery_variance",
+            "max_commutator",
+        ):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+        for name in ("stlsq_threshold", "noether_orth_weight", "noether_norm_weight"):
+            if not math.isfinite(getattr(self, name)) or getattr(self, name) < 0:
+                raise ValueError(f"invalid {name}")
+        if self.dtype not in (torch.float32, torch.float64) or self.protection_mode not in (
+            "activation",
+            "task",
+        ):
+            raise ValueError("unsupported dtype or protection mode")
+        if not 0 < self.min_discovery_r2 <= 1:
+            raise ValueError("min_discovery_r2 must be in (0,1]")
+        if torch.device(self.device).type == "cuda" and not torch.cuda.is_available():
+            raise ValueError("CUDA unavailable")
+
+================================================================================
+FILE: cnge_v2/core_dynamics/__init__.py
+SHA256: c06c76428c81384d231cb6cd059d24a7e2bccbc5e6afc8ffe42a680a0ba3a5b2
+================================================================================
+"""CNGE-v2 core_dynamics components."""
+
+================================================================================
+FILE: cnge_v2/core_dynamics/hamiltonian_surrogate.py
+SHA256: 39318cc3b6ae944e3ca64873f61606aa9ff9208e108ce7f05cb2d86061af5a4f
+================================================================================
+from torch import nn
+
+from cnge_engine.dynamics.hamiltonian_nn import smooth_mlp
+
+from ..manifold.canonical_symplectic import SymplecticStructure
+
+
+class HamiltonianSurrogate(nn.Module):
+    def __init__(self, spatial_dim, hidden_dim=128):
+        super().__init__()
+        self.structure = SymplecticStructure(spatial_dim)
+        self.network = smooth_mlp(2 * spatial_dim, (hidden_dim, hidden_dim))
+
+    def energy(self, z):
+        return self.network(z)
+
+    def forward(self, z):
+        return self.energy(z)
+
+    def vector_field(self, z):
+        return self.structure.field(self.energy, z)
+
+================================================================================
+FILE: cnge_v2/core_dynamics/symplectic_lora.py
+SHA256: 18212ce5ea15f0bca2c9b4a36f706329ab9dcf02e38b379d1ae791ac78588389
+================================================================================
+import math
+from contextlib import contextmanager
+
+import torch
+from torch import nn
+from torch.nn import functional as F
+
+
+class ActivationCapacityError(RuntimeError):
+    """The protected activation span exhausts a layer's finite input dimension."""
+
+
+def orthonormal_union(existing, incoming):
+    if (
+        incoming.ndim != 2
+        or incoming.shape[0] != existing.shape[0]
+        or not torch.isfinite(incoming).all()
+    ):
+        raise ValueError("activation bases must be finite [input_dim, rank] matrices")
+    joined = torch.cat((existing, incoming.to(existing)), 1)
+    if joined.shape[1] == 0:
+        return joined
+    U, singular, _ = torch.linalg.svd(joined, full_matrices=False)
+    tol = max(joined.shape) * torch.finfo(joined.dtype).eps * singular.max()
+    return U[:, singular > tol].detach()
+
+
+class FrozenAdapter(nn.Module):
+    def __init__(self, A, B):
+        super().__init__()
+        self.register_buffer("A", A.detach().clone())
+        self.register_buffer("B", B.detach().clone())
+
+    def forward(self, x):
+        return F.linear(F.linear(x, self.A), self.B)
+
+
+class OrthogonalLoRALinear(nn.Module):
+    def __init__(self, base, rank, protection_mode):
+        super().__init__()
+        self.base = base.requires_grad_(False)
+        self.rank = min(rank, base.in_features, base.out_features)
+        self.mode = protection_mode
+        self.A = nn.Parameter(base.weight.new_empty(self.rank, base.in_features))
+        self.B = nn.Parameter(base.weight.new_zeros(base.out_features, self.rank))
+        self.register_buffer("U", base.weight.new_empty(base.in_features, 0))
+        self.frozen = nn.ModuleList()
+        self.selected_task = None
+        self.reset_active()
+
+    def reset_active(self):
+        nn.init.kaiming_uniform_(self.A, a=math.sqrt(5))
+        nn.init.zeros_(self.B)
+
+    def effective_A(self):
+        if self.mode == "task":
+            return self.A
+        return self.A - (self.A @ self.U) @ self.U.T
+
+    def forward(self, x):
+        output = self.base(x)
+        count = len(self.frozen) if self.selected_task is None else self.selected_task + 1
+        for adapter in self.frozen[:count]:
+            output = output + adapter(x)
+        if self.selected_task is None:
+            output = output + F.linear(F.linear(x, self.effective_A()), self.B)
+        return output
+
+
+class SymplecticLoRAEngine(nn.Module):
+    """Low-rank energy adapters preserve Hamiltonian form through the scalar energy.
+
+    Activation mode constrains new changes on a finite reference span. Task mode
+    permits unrestricted new adapters and exact replay of named frozen snapshots.
+    Neither mode proves context-free preservation of all physical invariants.
+    """
+
+    def __init__(self, base_model, rank=4, protection_mode="activation"):
+        super().__init__()
+        if rank < 1 or protection_mode not in ("activation", "task"):
+            raise ValueError("invalid adapter configuration")
+        self.base_model = base_model.requires_grad_(False).eval()
+        self.protection_mode = protection_mode
+        self.task_ids = []
+        self.layers = {}
+        for name, module in list(base_model.named_modules()):
+            if isinstance(module, nn.Linear):
+                parent_name, _, leaf = name.rpartition(".")
+                parent = base_model.get_submodule(parent_name) if parent_name else base_model
+                replacement = OrthogonalLoRALinear(module, rank, protection_mode)
+                setattr(parent, leaf, replacement)
+                self.layers[name] = replacement
+        if not self.layers:
+            raise ValueError("base_model must contain at least one Linear layer")
+
+    def train(self, mode=True):
+        super().train(mode)
+        # Frozen running statistics and disabled dropout are part of snapshot reproducibility.
+        self.base_model.eval()
+        return self
+
+    def forward(self, *args, **kwargs):
+        self.base_model.eval()
+        return self.base_model(*args, **kwargs)
+
+    def active_parameters(self):
+        return [p for layer in self.layers.values() for p in (layer.A, layer.B)]
+
+    def assert_plastic_capacity(self):
+        if self.protection_mode == "activation":
+            saturated = [
+                name
+                for name, layer in self.layers.items()
+                if layer.U.shape[1] == layer.base.in_features
+            ]
+            if saturated:
+                raise ActivationCapacityError(
+                    f"activation capacity exhausted in {saturated}; explicit task routing or feature expansion is required"
+                )
+
+    def active_adapter_state(self):
+        return {
+            f"{name}.{suffix}": getattr(layer, suffix).detach().clone()
+            for name, layer in self.layers.items()
+            for suffix in ("A", "B")
+        }
+
+    def capture_activation_subspaces(self, samples):
+        activations = {name: [] for name in self.layers}
+        handles = []
+        for name, layer in self.layers.items():
+
+            def hook(module, args, key=name):
+                activations[key].append(args[0].detach().reshape(-1, module.base.in_features))
+
+            handles.append(layer.register_forward_pre_hook(hook))
+        try:
+            with torch.no_grad():
+                self(samples)
+        finally:
+            for handle in handles:
+                handle.remove()
+        result = {}
+        for name, entries in activations.items():
+            if not entries:
+                raise ValueError(f"layer {name} was not evaluated")
+            values = torch.cat(entries).T
+            empty = values.new_empty(values.shape[0], 0)
+            result[name] = orthonormal_union(empty, values)
+        return result
+
+    def register_frozen_invariant_adapter(self, task_id, adapter_weights, activation_subspace):
+        if not isinstance(task_id, str) or not task_id or task_id in self.task_ids:
+            raise ValueError("task_id must be unique and nonempty")
+        if len(self.task_ids) >= 128:
+            raise ActivationCapacityError("snapshot budget of 128 tasks exhausted")
+        # Validate every layer before changing any model state.
+        prepared = []
+        for name, layer in self.layers.items():
+            A = adapter_weights[f"{name}.A"].to(layer.A)
+            B = adapter_weights[f"{name}.B"].to(layer.B)
+            if (
+                A.shape != layer.A.shape
+                or B.shape != layer.B.shape
+                or not torch.isfinite(A).all()
+                or not torch.isfinite(B).all()
+            ):
+                raise ValueError("invalid adapter weights")
+            incoming = (
+                activation_subspace[name]
+                if isinstance(activation_subspace, dict)
+                else activation_subspace
+            )
+            union = orthonormal_union(layer.U, incoming)
+            effective = A if layer.mode == "task" else A - (A @ layer.U) @ layer.U.T
+            prepared.append((layer, effective, B, union))
+        with torch.no_grad():
+            for layer, A, B, union in prepared:
+                layer.frozen.append(FrozenAdapter(A, B))
+                layer.U = union
+                layer.reset_active()
+        self.task_ids.append(task_id)
+
+    def get_orthogonalized_gradient(self, layer_name, raw_gradient):
+        layer = self.layers[layer_name]
+        if raw_gradient.shape != layer.base.weight.shape:
+            raise ValueError("expected a dense [output_dim,input_dim] layer gradient")
+        U = layer.U.to(raw_gradient)
+        return raw_gradient - (raw_gradient @ U) @ U.T
+
+    @contextmanager
+    def task(self, task_id):
+        if task_id is not None and task_id not in self.task_ids:
+            raise KeyError(f"unknown task: {task_id}")
+        previous = [layer.selected_task for layer in self.layers.values()]
+        index = None if task_id is None else self.task_ids.index(task_id)
+        try:
+            for layer in self.layers.values():
+                layer.selected_task = index
+            yield self
+        finally:
+            for layer, value in zip(self.layers.values(), previous):
+                layer.selected_task = value
+
+    def get_extra_state(self):
+        return {"task_ids": self.task_ids.copy(), "protection_mode": self.protection_mode}
+
+    def set_extra_state(self, state):
+        if state["protection_mode"] != self.protection_mode:
+            raise ValueError("checkpoint protection mode differs")
+        self.task_ids = list(state["task_ids"])
+
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        metadata = state_dict.get("_extra_state", {})
+        tasks = metadata.get("task_ids", [])
+        for name, layer in self.layers.items():
+            prefix = f"base_model.{name}."
+            layer.U = torch.empty_like(state_dict[prefix + "U"], device=layer.A.device)
+            layer.frozen = nn.ModuleList(
+                [
+                    FrozenAdapter(
+                        state_dict[prefix + f"frozen.{i}.A"].to(layer.A),
+                        state_dict[prefix + f"frozen.{i}.B"].to(layer.B),
+                    )
+                    for i in range(len(tasks))
+                ]
+            )
+        return super().load_state_dict(state_dict, strict=strict, assign=assign)
+
+================================================================================
+FILE: cnge_v2/demo.py
+SHA256: 26e8f67615cbc7ad860c8fab7b6b8ff0d48436f66a5e376c6d7d28591250ae3f
+================================================================================
+"""Run a noisy-observation v2 pipeline and an independent sparse Kepler benchmark."""
+
+import argparse
+import asyncio
+import json
+import time
+from pathlib import Path
+
+import numpy as np
+import torch
+
+from . import V2EngineConfig
+from .execution.live_orchestrator import LiveOrchestrator
+from .execution.streaming_pipeline import StreamingEpistemicPipeline
+from .symbolic_distiller.constrained_stlsq import ConstrainedSTLSQ
+from .symbolic_distiller.functional_dictionary import FunctionalDictionary
+
+
+def sparse_kepler(seed=9):
+    rng = np.random.default_rng(seed)
+    library = FunctionalDictionary(
+        [f"q_{i}" for i in range(3)] + [f"p_{i}" for i in range(3)], include_kepler=True
+    )
+
+    def sample():
+        z = rng.normal(size=(512, 6))
+        z[:, :3] += [2.0, 0.0, 0.0]
+        q, p = z[:, :3], z[:, 3:]
+        target = (np.cross(p, np.cross(q, p)) - q / np.linalg.norm(q, axis=1, keepdims=True))[:, 0]
+        features, names = library.build_library(torch.from_numpy(z))
+        return features.numpy(), target, names
+
+    features, target, names = sample()
+    start = time.perf_counter()
+    formula, coefficients, r2 = ConstrainedSTLSQ().fit(features, target, names)
+    seconds = time.perf_counter() - start
+    test_features, test_target, _ = sample()
+    test_r2 = 1 - np.mean((test_features @ coefficients - test_target) ** 2) / np.var(test_target)
+    return {
+        "formula": formula,
+        "active_terms": int(np.count_nonzero(coefficients)),
+        "training_r2": r2,
+        "heldout_r2": float(test_r2),
+        "fit_seconds": seconds,
+        "scope": "Sparse distillation of analytical Runge-Lenz evaluations, not autonomous discovery.",
+    }
+
+
+async def run_demo(steps=20, calibration_steps=40):
+    if steps < 2 or calibration_steps < 1:
+        raise ValueError("steps >=2 and calibration_steps >=1 required")
+    torch.manual_seed(12)
+    torch.set_num_threads(1)
+    config = V2EngineConfig(
+        obs_dim=8,
+        latent_spatial_dim=1,
+        hidden_dim=16,
+        dtype=torch.float64,
+        device="cpu",
+        protection_mode="task",
+        observation_covariance=0.015**2,
+    )
+    pipeline = StreamingEpistemicPipeline(config)
+    projection, _ = torch.linalg.qr(torch.randn(8, 2, dtype=config.dtype))
+    phase = torch.linspace(0, 8, 64, dtype=config.dtype)
+
+    def observe(angle):
+        return torch.stack((angle.cos(), angle.sin()), -1) @ projection.T
+
+    pairs = torch.stack((observe(phase), observe(phase + 0.01)), 1)
+    pairs += 0.015 * torch.randn_like(pairs)
+    history = pipeline.calibrate(pairs, steps=calibration_steps)
+    telemetry = []
+
+    async def source():
+        for i in range(steps):
+            yield observe(torch.tensor(i * 0.01, dtype=config.dtype)) + 0.015 * torch.randn(
+                config.obs_dim, dtype=config.dtype
+            )
+
+    await LiveOrchestrator(pipeline, callback=telemetry.append).run(source())
+    return {
+        "calibration_initial_loss": history[0]["total_loss"],
+        "calibration_final_loss": history[-1]["total_loss"],
+        "ticks": len(telemetry),
+        "last_tick": telemetry[-1],
+        "kepler": sparse_kepler(),
+        "scope": "Differential coordinate learning + EKF + online adapters. No claim of uniquely recovered physical canonical coordinates.",
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--steps", type=int, default=20)
+    parser.add_argument("--calibration-steps", type=int, default=40)
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args()
+    report = asyncio.run(run_demo(args.steps, args.calibration_steps))
+    text = json.dumps(report, indent=2)
+    print(text)
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(text + "\n")
+    if report["kepler"]["heldout_r2"] < 0.999 or report["kepler"]["active_terms"] >= 6:
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()
+
+================================================================================
+FILE: cnge_v2/execution/__init__.py
+SHA256: 22116850446e6d92f5c798a215be196188ee21578bef5369afa0e42e1e7cd43e
+================================================================================
+"""CNGE-v2 execution components."""
+
+================================================================================
+FILE: cnge_v2/execution/live_orchestrator.py
+SHA256: c1de6e60e512033c06bdf4766071a7103f1cabe0c77235085a80091c87ee0335
+================================================================================
+import asyncio
+
+from .streaming_pipeline import StreamingEpistemicPipeline
+
+
+class LiveOrchestrator:
+    """Explicit bounded ingress, ordered single-worker updates and propagated errors."""
+
+    def __init__(self, pipeline: StreamingEpistemicPipeline, capacity=64, callback=None):
+        if capacity < 1:
+            raise ValueError("capacity must be positive")
+        self.pipeline, self.callback = pipeline, callback
+        self.capacity = capacity
+        self.queue = asyncio.Queue(maxsize=capacity)
+        self._running = False
+
+    async def run(self, source):
+        if self._running:
+            raise RuntimeError("orchestrator already running")
+        self._running = True
+        self.queue = asyncio.Queue(maxsize=self.capacity)
+        sentinel = object()
+
+        async def produce():
+            async for observation in source:
+                await self.queue.put(observation)
+            await self.queue.put(sentinel)
+
+        async def consume():
+            while True:
+                observation = await self.queue.get()
+                try:
+                    if observation is sentinel:
+                        return
+                    telemetry = await self.pipeline.ingest_sensor_tick(observation)
+                    if self.callback:
+                        result = self.callback(telemetry)
+                        if hasattr(result, "__await__"):
+                            await result
+                    await asyncio.sleep(0)
+                finally:
+                    self.queue.task_done()
+
+        try:
+            async with asyncio.TaskGroup() as group:
+                group.create_task(produce(), name="cnge-v2-ingestion")
+                group.create_task(consume(), name="cnge-v2-learning")
+        finally:
+            self._running = False
+
+================================================================================
+FILE: cnge_v2/execution/observation_history.py
+SHA256: f993c3ac53d2c8c2772f15ee316f74b48e10d85f0de8c3517c80021f50e930b1
+================================================================================
+from collections import deque
+
+import torch
+
+
+class ObservationHistory:
+    """Bounded delay coordinates for sensors whose instantaneous frame is not observable."""
+
+    def __init__(self, frame_dim, length=4):
+        if frame_dim < 1 or length < 2:
+            raise ValueError("positive frame dimension and at least two history frames required")
+        self.frame_dim, self.length = frame_dim, length
+        self.frames = deque(maxlen=length)
+
+    def update(self, frame):
+        value = torch.as_tensor(frame)
+        if value.shape != (self.frame_dim,) or not torch.isfinite(value).all():
+            raise ValueError("one finite frame vector is required")
+        if self.frames and (
+            value.dtype != self.frames[0].dtype or value.device != self.frames[0].device
+        ):
+            raise ValueError("reset history before changing dtype/device")
+        self.frames.append(value.detach().clone())
+        return torch.cat(tuple(self.frames)) if len(self.frames) == self.length else None
+
+    def reset(self):
+        self.frames.clear()
+
+================================================================================
+FILE: cnge_v2/execution/streaming_pipeline.py
+SHA256: 7c40f62708f94c339047cc7e79ad6f65b2074cd72c5ab553613a480d64b5b815
+================================================================================
+import asyncio
+from collections import deque
+from dataclasses import asdict
+from pathlib import Path
+
+import numpy as np
+import torch
+
+from ..config.engine_config import V2EngineConfig
+from ..core_dynamics.hamiltonian_surrogate import HamiltonianSurrogate
+from ..core_dynamics.symplectic_lora import SymplecticLoRAEngine
+from ..manifold.variational_autoencoder import SymplecticAutoencoder
+from ..solvers.implicit_midpoint import ImplicitMidpointSolver
+from ..solvers.kalman_manifold_filter import SymplecticEKF
+from ..symbolic_distiller.constrained_stlsq import ConstrainedSTLSQ
+from ..symbolic_distiller.functional_dictionary import FunctionalDictionary
+from ..symmetry_engine.gauge_fixed_noether import DegenerateGaugeError, GaugeFixedNoetherMiner
+
+
+class StreamingEpistemicPipeline:
+    """Single-worker, serialized calibration/EKF/adapter/mining/distillation lifecycle."""
+
+    def __init__(self, config: V2EngineConfig):
+        self.config = config
+        self.autoencoder = SymplecticAutoencoder(
+            config.obs_dim,
+            config.latent_spatial_dim,
+            config.hidden_dim,
+            observation_noise_variance=config.observation_covariance,
+        ).to(device=config.device, dtype=config.dtype)
+        self.hamiltonian = HamiltonianSurrogate(config.latent_spatial_dim, config.hidden_dim).to(
+            device=config.device, dtype=config.dtype
+        )
+        self.adapters = SymplecticLoRAEngine(
+            self.hamiltonian, config.lora_rank, config.protection_mode
+        )
+        self.miner = GaugeFixedNoetherMiner(
+            config.latent_spatial_dim,
+            config.hidden_dim,
+            config.noether_orth_weight,
+            config.noether_norm_weight,
+        ).to(device=config.device, dtype=config.dtype)
+        self.solver = ImplicitMidpointSolver(config.integrator_tol, config.integrator_max_iter)
+        self.autoencoder.solver = self.solver
+        self.filter = SymplecticEKF(
+            config.latent_spatial_dim,
+            config.process_covariance,
+            config.observation_covariance,
+            solver=self.solver,
+        )
+        self.optimizer = torch.optim.Adam(
+            self.adapters.active_parameters(), lr=config.learning_rate
+        )
+        self.miner_optimizer = torch.optim.Adam(self.miner.parameters(), lr=config.learning_rate)
+        d = config.latent_spatial_dim
+        self.dictionary = FunctionalDictionary(
+            [f"q_{i}" for i in range(d)] + [f"p_{i}" for i in range(d)],
+            config.dictionary_degree,
+            max_features=config.dictionary_max_features,
+        )
+        self.distiller = ConstrainedSTLSQ(config.stlsq_threshold, max_iter=config.stlsq_max_iter)
+        self.buffer = deque(maxlen=config.buffer_size)
+        self.reference = None
+        self.posterior = self.covariance = self.previous = None
+        self.ready = False
+        self.last_metrics = {}
+        self.discoveries = []
+        self._lock = asyncio.Lock()
+        self._sequence = 0
+
+    def calibrate(self, x_seq, steps=100):
+        if self.adapters.task_ids:
+            raise RuntimeError("cannot change the shared coordinate chart after freezing a task")
+        samples = torch.as_tensor(x_seq, device=self.config.device, dtype=self.config.dtype)
+        if (
+            samples.ndim != 3
+            or samples.shape[1:] != (2, self.config.obs_dim)
+            or len(samples) < 8
+            or not torch.isfinite(samples).all()
+            or steps < 1
+        ):
+            raise ValueError(
+                "calibration needs at least 8 finite observation pairs [B,2,D] and steps>=1"
+            )
+        self.autoencoder.requires_grad_(True)
+        optimizer = torch.optim.Adam(
+            [*self.autoencoder.parameters(), *self.adapters.active_parameters()],
+            lr=self.config.learning_rate,
+        )
+        history = []
+        try:
+            for _ in range(steps):
+                optimizer.zero_grad(set_to_none=True)
+                losses = self.autoencoder.compute_loss(
+                    samples, self.config.integrator_dt, self.hamiltonian.energy
+                )
+                if not all(torch.isfinite(value) for value in losses.values()):
+                    raise RuntimeError("nonfinite calibration loss")
+                losses["total_loss"].backward()
+                torch.nn.utils.clip_grad_norm_(
+                    [*self.autoencoder.parameters(), *self.adapters.active_parameters()],
+                    10.0,
+                    error_if_nonfinite=True,
+                )
+                optimizer.step()
+                history.append({key: float(value.detach()) for key, value in losses.items()})
+        finally:
+            self.autoencoder.requires_grad_(False)
+        with torch.no_grad():
+            self.reference = self.autoencoder.encoder(samples[:, 0]).detach()
+        self.miner.set_reference(self.reference, self.hamiltonian)
+        self.optimizer = torch.optim.Adam(
+            self.adapters.active_parameters(), lr=self.config.learning_rate
+        )
+        self.reset_stream()
+        self.ready = True
+        return history
+
+    def reset_stream(self):
+        self.posterior = self.covariance = self.previous = None
+        self.buffer.clear()
+
+    def _learn(self):
+        self.adapters.assert_plastic_capacity()
+        if len(self.buffer) < 2:
+            return {}
+        recent = list(self.buffer)[-32:]
+        z0 = torch.cat([entry[0] for entry in recent[:-1]])
+        z1 = torch.cat([entry[0] for entry in recent[1:]])
+        self.optimizer.zero_grad(set_to_none=True)
+        predicted = self.solver.integrate_step(
+            z0, self.hamiltonian.vector_field, self.config.integrator_dt
+        )
+        # Integrated latent and decoded-observation residuals; no q finite-difference momentum.
+        observed = torch.cat([entry[1] for entry in recent[1:]])
+        dynamics = (predicted - z1).square().mean() + (
+            self.autoencoder.decoder(predicted) - observed
+        ).square().mean()
+        if not torch.isfinite(dynamics):
+            raise RuntimeError("nonfinite dynamics loss")
+        dynamics.backward()
+        torch.nn.utils.clip_grad_norm_(
+            self.adapters.active_parameters(), 10.0, error_if_nonfinite=True
+        )
+        self.optimizer.step()
+        self.miner_optimizer.zero_grad(set_to_none=True)
+        flags = [(p, p.requires_grad) for p in self.adapters.active_parameters()]
+        try:
+            for p, _ in flags:
+                p.requires_grad_(False)
+            loss, metrics = self.miner.compute_orthogonalized_loss(self.reference, self.hamiltonian)
+            if not torch.isfinite(loss):
+                raise RuntimeError("nonfinite Noether loss")
+            gradients = torch.autograd.grad(loss, tuple(self.miner.parameters()))
+            for p, gradient in zip(self.miner.parameters(), gradients):
+                p.grad = gradient
+            torch.nn.utils.clip_grad_norm_(self.miner.parameters(), 10.0, error_if_nonfinite=True)
+            self.miner_optimizer.step()
+            del gradients, loss
+        except DegenerateGaugeError as error:
+            metrics = {"gauge_rejection": str(error)}
+        finally:
+            for p, flag in flags:
+                p.requires_grad_(flag)
+        return {"dynamics_loss": float(dynamics.detach()), **metrics}
+
+    async def ingest_sensor_tick(self, x_raw):
+        async with self._lock:
+            if not self.ready:
+                raise RuntimeError("calibrate(x_seq) is required before ingesting observations")
+            x = torch.as_tensor(x_raw, device=self.config.device, dtype=self.config.dtype)
+            if x.ndim == 1:
+                x = x[None]
+            if x.shape != (1, self.config.obs_dim) or not torch.isfinite(x).all():
+                raise ValueError("one finite raw observation [obs_dim] is required")
+            with torch.no_grad():
+                encoded = self.autoencoder.encoder(x)
+            if self.posterior is None:
+                prior = encoded
+                covariance = torch.eye(
+                    encoded.shape[-1], device=encoded.device, dtype=encoded.dtype
+                )[None]
+            else:
+                prior, covariance = self.filter.predict(
+                    self.posterior,
+                    self.covariance,
+                    self.hamiltonian.vector_field,
+                    self.config.integrator_dt,
+                )
+            posterior, covariance = self.filter.update(
+                prior, covariance, x, self.autoencoder.decoder
+            )
+            self.posterior, self.covariance = posterior, covariance
+            self.buffer.append((posterior.detach(), x.detach()))
+            self.last_metrics = self._learn()
+            with torch.no_grad():
+                energy = float(self.hamiltonian.energy(posterior).item())
+            self._sequence += 1
+            return {
+                "sequence": self._sequence,
+                "phase_coordinates": posterior[0].cpu().tolist(),
+                "energy": energy,
+                "metrics": self.last_metrics,
+                "covariance_trace": float(torch.diagonal(covariance, dim1=-2, dim2=-1).sum()),
+            }
+
+    def consolidate_task(self, task_id):
+        if not self.ready:
+            raise RuntimeError("pipeline is not calibrated")
+        subspaces = self.adapters.capture_activation_subspaces(self.reference)
+        self.adapters.register_frozen_invariant_adapter(
+            task_id, self.adapters.active_adapter_state(), subspaces
+        )
+        # Reset Adam moments when starting a new adapter; momentum must not leak across tasks.
+        self.optimizer = torch.optim.Adam(
+            self.adapters.active_parameters(), lr=self.config.learning_rate
+        )
+        self.reset_stream()
+
+    def trigger_symbolic_distillation(self):
+        if not self.ready or len(self.reference) < 32:
+            return None
+        training, heldout = self.reference[::2], self.reference[1::2]
+        try:
+            z = heldout.detach().requires_grad_(True)
+            values = self.miner(z)
+            bracket = self.hamiltonian.structure.poisson_bracket(values, self.hamiltonian(z), z)
+            if (
+                float(values.detach().var(unbiased=False)) <= self.config.min_discovery_variance
+                or float(bracket.detach().square().mean()) >= self.config.max_commutator
+            ):
+                return None
+            with torch.enable_grad():
+                target = self.miner(training).detach().cpu().numpy()
+            features, names = self.dictionary.build_library(training)
+            constraints = (
+                self.dictionary.conservation_constraints(training, self.hamiltonian.vector_field)
+                .detach()
+                .cpu()
+                .numpy()
+            )
+            formula, coefficients, train_r2 = self.distiller.fit(
+                features.detach().cpu().numpy(), target, names, constraints=constraints
+            )
+            heldout_features, _ = self.dictionary.build_library(heldout)
+            predictions = heldout_features.detach().cpu().numpy() @ coefficients
+            actual = values.detach().cpu().numpy().reshape(-1)
+            r2 = 1 - np.mean((predictions - actual) ** 2) / max(float(np.var(actual)), 1e-24)
+            if not np.isfinite(r2) or r2 < self.config.min_discovery_r2:
+                return None
+            # Check the synthesized scalar's own Poisson residual, not only the neural target.
+            gradients, _ = self.dictionary.gradient_library(heldout)
+            compiled_gradient = torch.einsum(
+                "bmn,m->bn",
+                gradients,
+                torch.as_tensor(coefficients, device=z.device, dtype=z.dtype),
+            )
+            residual = (compiled_gradient * self.hamiltonian.vector_field(heldout)).sum(-1)
+            if float(residual.detach().square().mean()) >= self.config.max_commutator:
+                return None
+        except DegenerateGaugeError:
+            return None
+        task_id = f"discovery_{len(self.adapters.task_ids) + 1}"
+        report = {
+            "task_id": task_id,
+            "latex": formula,
+            "r2": float(r2),
+            "training_r2": train_r2,
+            "coefficients": coefficients.tolist(),
+            "features": names,
+            "status": "empirically validated candidate on a finite latent reference set",
+        }
+        self.consolidate_task(task_id)
+        self.discoveries.append(report)
+        return report
+
+    def save_checkpoint(self, path):
+        if not self.ready:
+            raise RuntimeError("cannot save an uncalibrated pipeline")
+        config = asdict(self.config)
+        config["dtype"] = str(self.config.dtype).split(".")[-1]
+        payload = {
+            "version": 2,
+            "config": config,
+            "autoencoder": self.autoencoder.state_dict(),
+            "adapters": self.adapters.state_dict(),
+            "miner_network": self.miner.network.state_dict(),
+            "reference": self.reference,
+            "optimizer": self.optimizer.state_dict(),
+            "miner_optimizer": self.miner_optimizer.state_dict(),
+            "discoveries": self.discoveries,
+        }
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_suffix(target.suffix + ".tmp")
+        torch.save(payload, temporary)
+        temporary.replace(target)
+
+    @classmethod
+    def load_checkpoint(cls, path, *, device="cpu"):
+        payload = torch.load(path, map_location=device, weights_only=True)
+        if payload["version"] != 2:
+            raise ValueError("unsupported checkpoint")
+        config = payload["config"]
+        config["device"] = device
+        config["dtype"] = {"float32": torch.float32, "float64": torch.float64}[config["dtype"]]
+        pipeline = cls(V2EngineConfig(**config))
+        pipeline.autoencoder.load_state_dict(payload["autoencoder"])
+        pipeline.autoencoder.requires_grad_(False)
+        pipeline.adapters.load_state_dict(payload["adapters"])
+        pipeline.miner.network.load_state_dict(payload["miner_network"])
+        pipeline.reference = payload["reference"]
+        pipeline.miner.set_reference(pipeline.reference, pipeline.hamiltonian)
+        pipeline.optimizer.load_state_dict(payload["optimizer"])
+        pipeline.miner_optimizer.load_state_dict(payload["miner_optimizer"])
+        pipeline.discoveries = payload["discoveries"]
+        pipeline.ready = True
+        return pipeline
+
+================================================================================
+FILE: cnge_v2/manifold/__init__.py
+SHA256: 3eb4ae513ac54d9418617ab40d5d5f6fa831570322cc4442a2003f781564fafc
+================================================================================
+"""CNGE-v2 manifold components."""
+
+================================================================================
+FILE: cnge_v2/manifold/canonical_symplectic.py
+SHA256: 85fad5a127dd6d86998e0a681dc7c56ed25ce66872ac806343ec3523720d1c40
+================================================================================
+import torch
+
+from cnge_engine.math_core.symplectic import SymplecticManifold, scalar_gradient
+
+
+class SymplecticStructure(SymplecticManifold):
+    """A skew pairing, not an inner product: u^T J u is always zero."""
+
+    def symplectic_gradient(self, grad_H):
+        return self.hamiltonian_vector_field(grad_H)
+
+    def pairing(self, u, v):
+        return (u * (v @ self.J.T)).sum(-1, keepdim=True)
+
+    def field(self, H_fn, z):
+        with torch.enable_grad():
+            point = z if z.requires_grad else z.detach().requires_grad_(True)
+            return self.symplectic_gradient(scalar_gradient(H_fn(point), point))
+
+    def pullback_defect(self, jacobian):
+        if jacobian.shape[-2:] != self.J.shape:
+            raise ValueError("a square canonical-to-canonical Jacobian is required")
+        return jacobian.transpose(-1, -2) @ self.J @ jacobian - self.J
+
+================================================================================
+FILE: cnge_v2/manifold/variational_autoencoder.py
+SHA256: 2866d0635f999e788146fbb8bbd15095815869d35b78c98a4cb2ff9a9967e891
+================================================================================
+import math
+
+import torch
+from torch import nn
+
+from cnge_engine.dynamics.hamiltonian_nn import SmoothSoftplus
+
+from ..solvers.implicit_midpoint import ImplicitMidpointSolver
+from .canonical_symplectic import SymplecticStructure
+
+
+class SymplecticAutoencoder(nn.Module):
+    """Differential autoencoder; latent Hamiltonian dynamics, not an identifiable canonical encoder.
+
+    `variational` refers to the dynamical objective, not a probabilistic ELBO.
+    A single position image cannot determine an unobserved velocity; supply history features.
+    """
+
+    def __init__(
+        self,
+        obs_dim,
+        spatial_dim,
+        hidden_dim=64,
+        tangent_weight=0.01,
+        prediction_weight=1.0,
+        observation_noise_variance=0.0,
+        solver=None,
+    ):
+        super().__init__()
+        if min(obs_dim, spatial_dim, hidden_dim) < 1 or min(tangent_weight, prediction_weight) < 0:
+            raise ValueError("invalid autoencoder configuration")
+        if not math.isfinite(observation_noise_variance) or observation_noise_variance < 0:
+            raise ValueError("observation noise variance must be finite and nonnegative")
+        self.observation_noise_variance = observation_noise_variance
+        self.solver = solver or ImplicitMidpointSolver()
+        self.obs_dim, self.spatial_dim = obs_dim, spatial_dim
+        self.tangent_weight, self.prediction_weight = tangent_weight, prediction_weight
+        self.encoder = nn.Sequential(
+            nn.Linear(obs_dim, hidden_dim), SmoothSoftplus(), nn.Linear(hidden_dim, 2 * spatial_dim)
+        )
+        self.decoder = nn.Sequential(
+            nn.Linear(2 * spatial_dim, hidden_dim), SmoothSoftplus(), nn.Linear(hidden_dim, obs_dim)
+        )
+        self.structure = SymplecticStructure(spatial_dim)
+
+    def forward(self, x):
+        if x.shape[-1] != self.obs_dim:
+            raise ValueError("wrong observation dimension")
+        z = self.encoder(x)
+        return z, self.decoder(z)
+
+    def compute_loss(self, x_seq, dt, H_fn):
+        if (
+            x_seq.ndim != 3
+            or x_seq.shape[1:] != (2, self.obs_dim)
+            or not torch.isfinite(x_seq).all()
+            or not math.isfinite(dt)
+            or dt <= 0
+        ):
+            raise ValueError("expected finite [B,2,obs_dim] and positive dt")
+        with torch.enable_grad():
+            z0, r0 = self(x_seq[:, 0])
+            _z1, r1 = self(x_seq[:, 1])
+            if not z0.requires_grad:
+                z0 = z0.requires_grad_(True)
+            field = self.structure.field(H_fn, z0)
+            _, tangent = torch.autograd.functional.jvp(self.decoder, z0, field, create_graph=True)
+            rec = (r0 - x_seq[:, 0]).square().mean() + (r1 - x_seq[:, 1]).square().mean()
+            tangent_loss = ((x_seq[:, 1] - x_seq[:, 0]) / dt - tangent).square().mean()
+            # Integrated observation residual avoids the dt^-2 amplification of sensor noise.
+            # The actual temporal prediction always uses implicit midpoint, never an Euler fallback.
+            predicted = self.solver.integrate_step(z0, lambda z: self.structure.field(H_fn, z), dt)
+            prediction = (self.decoder(predicted) - x_seq[:, 1]).square().mean()
+            noise_scale = 1 + 2 * self.observation_noise_variance / (dt * dt)
+            total = (
+                rec
+                + self.tangent_weight * tangent_loss / noise_scale
+                + self.prediction_weight * prediction
+            )
+        return {
+            "total_loss": total,
+            "rec_loss": rec,
+            "tangent_loss": tangent_loss,
+            "prediction_loss": prediction,
+        }
+
+================================================================================
+FILE: cnge_v2/solvers/__init__.py
+SHA256: 614dad9a7f870ecb0199ef764ccc6f7524832948a7542bb1e0f03a9a703d8e02
+================================================================================
+"""CNGE-v2 solvers components."""
+
+================================================================================
+FILE: cnge_v2/solvers/implicit_midpoint.py
+SHA256: 2b398a61956f91fa5ea3103837a7afc67bf65752ad60cb4708a6f4177bea3374
+================================================================================
+from cnge_engine.math_core.integrators import ImplicitMidpointIntegrator
+
+
+class ImplicitMidpointSolver(ImplicitMidpointIntegrator):
+    """Shared validated midpoint implementation, including explicit nonconvergence errors."""
+
+    def __init__(self, tol=1e-10, max_iter=15):
+        super().__init__(max_iters=max_iter, tol=tol)
+
+    def integrate_step(self, z_t, vector_field_fn, dt):
+        return self.step(z_t, vector_field_fn, dt)
+
+================================================================================
+FILE: cnge_v2/solvers/kalman_manifold_filter.py
+SHA256: 839b874b05709c5cdf9e7024312e85d021bd2e6c33714d03d7ae207e59e97a5f
+================================================================================
+import math
+
+import torch
+
+from .implicit_midpoint import ImplicitMidpointSolver
+
+
+class SymplecticEKF:
+    """Euclidean EKF in canonical latent coordinates; measurement updates are not symplectic maps."""
+
+    def __init__(self, spatial_dim, Q_cov=1e-5, R_cov=1e-2, *, solver=None):
+        if spatial_dim < 1 or not all(math.isfinite(v) and v > 0 for v in (Q_cov, R_cov)):
+            raise ValueError("invalid EKF configuration")
+        self.n = 2 * spatial_dim
+        self.Q_cov, self.R_cov = Q_cov, R_cov
+        self.solver = solver or ImplicitMidpointSolver()
+
+    def _validate(self, z, covariance):
+        if z.ndim != 2 or z.shape[-1] != self.n or covariance.shape != (len(z), self.n, self.n):
+            raise ValueError("expected z[B,2d] and P[B,2d,2d]")
+        if not torch.isfinite(z).all() or not torch.isfinite(covariance).all():
+            raise ValueError("nonfinite EKF input")
+        if not torch.allclose(covariance, covariance.transpose(-1, -2), rtol=1e-5, atol=1e-7):
+            raise ValueError("covariance must be symmetric")
+        if torch.linalg.eigvalsh(covariance).min() < -1e-7:
+            raise ValueError("covariance must be positive semidefinite")
+
+    def predict(self, z_post, P_post, vector_field_fn, dt):
+        self._validate(z_post, P_post)
+        states, covariances = [], []
+        for z, P in zip(z_post, P_post):
+
+            def flow(point):
+                return self.solver.integrate_step(point[None], vector_field_fn, dt)[0]
+
+            with torch.enable_grad():
+                point = z.detach().requires_grad_(True)
+                prior = flow(point)
+                M = torch.autograd.functional.jacobian(flow, point)
+            covariance = M @ P @ M.T + self.Q_cov * torch.eye(
+                self.n, device=P.device, dtype=P.dtype
+            )
+            states.append(prior.detach())
+            covariances.append(((covariance + covariance.T) / 2).detach())
+        return torch.stack(states), torch.stack(covariances)
+
+    def update(self, z_prior, P_prior, x_observed, decoder_fn):
+        self._validate(z_prior, P_prior)
+        if (
+            x_observed.ndim != 2
+            or len(x_observed) != len(z_prior)
+            or not torch.isfinite(x_observed).all()
+        ):
+            raise ValueError("invalid observations")
+        states, covariances = [], []
+        for z, P, x in zip(z_prior, P_prior, x_observed):
+            with torch.enable_grad():
+                point = z.detach().requires_grad_(True)
+                predicted = decoder_fn(point[None])[0]
+                C = torch.autograd.functional.jacobian(lambda p: decoder_fn(p[None])[0], point)
+            if predicted.shape != x.shape:
+                raise ValueError("decoder and observation dimensions differ")
+            R = self.R_cov * torch.eye(len(x), device=P.device, dtype=P.dtype)
+            S = C @ P @ C.T + R
+            # SPD solve, not an explicitly formed inverse.
+            chol = torch.linalg.cholesky((S + S.T) / 2)
+            K = torch.cholesky_solve(C @ P, chol).T
+            state = z + K @ (x - predicted.detach())
+            residual = torch.eye(self.n, device=P.device, dtype=P.dtype) - K @ C
+            covariance = residual @ P @ residual.T + K @ R @ K.T  # Joseph form
+            states.append(state.detach())
+            covariances.append(((covariance + covariance.T) / 2).detach())
+        return torch.stack(states), torch.stack(covariances)
+
+================================================================================
+FILE: cnge_v2/symbolic_distiller/__init__.py
+SHA256: c4de31dacc5b03b645f02cf1abf29ba7e7525ba5dd6e1791ce7a1f39841a2e92
+================================================================================
+"""CNGE-v2 symbolic_distiller components."""
+
+================================================================================
+FILE: cnge_v2/symbolic_distiller/constrained_stlsq.py
+SHA256: 995242d966690a85c0eaa676f8e9705d38268bf6eeccec078f7bd6a518408034
+================================================================================
+import math
+
+import numpy as np
+
+
+class ConstrainedSTLSQ:
+    """Monotone-support STLSQ; polynomial for a fixed explicit library, no L0 optimality claim."""
+
+    def __init__(self, threshold=0.05, alpha=1e-4, max_iter=20):
+        if not all(math.isfinite(v) and v >= 0 for v in (threshold, alpha)) or max_iter < 1:
+            raise ValueError("invalid STLSQ controls")
+        self.threshold, self.alpha, self.max_iter = threshold, alpha, max_iter
+        self.n_iter_ = 0
+        self.coefficients_ = None
+
+    def _solve(self, X, y, C, alpha):
+        if X.shape[1] == 0:
+            return np.empty(0)
+        basis = np.eye(X.shape[1])
+        if C is not None and C.size:
+            _, singular, vh = np.linalg.svd(C, full_matrices=C.shape[0] < C.shape[1])
+            tol = max(C.shape) * np.finfo(float).eps * (singular[0] if len(singular) else 1)
+            rank = int(np.sum(singular > tol))
+            basis = vh[rank:].T
+            if basis.shape[1] == 0:
+                return np.zeros(X.shape[1])
+        design = X @ basis
+        if alpha:
+            design = np.concatenate((design, np.sqrt(alpha) * np.eye(basis.shape[1])))
+            y = np.concatenate((y, np.zeros(basis.shape[1])))
+        return basis @ np.linalg.lstsq(design, y, rcond=None)[0]
+
+    def fit(self, Theta, Target, feature_names, *, constraints=None):
+        X = np.asarray(Theta, dtype=float)
+        y = np.asarray(Target, dtype=float)
+        if y.ndim == 2 and y.shape[1] == 1:
+            y = y[:, 0]
+        if (
+            X.ndim != 2
+            or y.shape != (len(X),)
+            or min(X.shape) < 1
+            or len(feature_names) != X.shape[1]
+            or not np.isfinite(X).all()
+            or not np.isfinite(y).all()
+        ):
+            raise ValueError("expected finite Theta[N,M], Target[N,1], and M feature names")
+        C = None if constraints is None else np.asarray(constraints, dtype=float)
+        if C is not None and (C.ndim != 2 or C.shape[1] != X.shape[1] or not np.isfinite(C).all()):
+            raise ValueError("constraints must be a finite matrix C[:,M], enforcing C @ xi=0")
+        scales = np.sqrt(np.mean(X * X, axis=0))
+        nonzero = scales > np.finfo(float).eps
+        scales = np.where(nonzero, scales, 1.0)
+        normalized = X / scales
+        normalized_C = None if C is None else C / scales
+        active = nonzero.copy()
+        coefficients = np.zeros(X.shape[1])
+        coefficients[active] = self._solve(
+            normalized[:, active], y, None if C is None else normalized_C[:, active], self.alpha
+        )
+        for iteration in range(self.max_iter):
+            support = active & (np.abs(coefficients) >= self.threshold)
+            self.n_iter_ = iteration + 1
+            stable = np.array_equal(active, support)
+            active = support
+            coefficients[:] = 0
+            coefficients[active] = self._solve(
+                normalized[:, active],
+                y,
+                None if C is None else normalized_C[:, active],
+                0.0 if stable else self.alpha,
+            )
+            if stable:
+                break
+        # Final debiasing refit on the selected support, still respecting homogeneous constraints.
+        coefficients[:] = 0
+        coefficients[active] = self._solve(
+            normalized[:, active], y, None if C is None else normalized_C[:, active], 0.0
+        )
+        coefficients /= scales
+        predictions = X @ coefficients
+        variance = np.sum((y - y.mean()) ** 2)
+        error = np.sum((y - predictions) ** 2)
+        r2 = float(1 - error / variance) if variance > 1e-24 else float(error <= 1e-24)
+        terms = [
+            f"{coefficient:.10g}\\,({name})"
+            for coefficient, name in zip(coefficients, feature_names)
+            if coefficient != 0
+        ]
+        formula = " + ".join(terms).replace("+ -", "- ") or "0"
+        self.coefficients_ = coefficients.copy()
+        return formula, coefficients.copy(), r2
+
+    def fit_gradient(self, dictionary, z, target_gradients, *, constraints=None):
+        gradients, names = dictionary.gradient_library(z)
+        target = target_gradients.detach().cpu().numpy()
+        if target.shape != tuple(z.shape):
+            raise ValueError("target gradients must have shape [N,2d]")
+        design = gradients.permute(0, 2, 1).detach().cpu().numpy().reshape(-1, len(names))
+        return self.fit(design, target.reshape(-1), names, constraints=constraints)
+
+================================================================================
+FILE: cnge_v2/symbolic_distiller/functional_dictionary.py
+SHA256: f2844198395c83f4af73bd2b294173b2b853d57f90e476899357209df1d1ff24
+================================================================================
+from itertools import combinations_with_replacement
+from math import comb
+
+import torch
+
+
+class FunctionalDictionary:
+    """Fixed-degree explicit dictionary with a hard feature budget, units and scaling filters."""
+
+    def __init__(
+        self,
+        variable_names,
+        max_poly_order=3,
+        include_trig=True,
+        *,
+        include_kepler=False,
+        max_features=2048,
+        scaling_weights=None,
+        target_scaling=None,
+        variable_units=None,
+        target_units=None,
+    ):
+        n = len(variable_names)
+        if n < 1 or len(set(variable_names)) != n or max_poly_order < 1:
+            raise ValueError("invalid dictionary variables or degree")
+        count = (
+            comb(n + max_poly_order, max_poly_order)
+            + (2 * n if include_trig else 0)
+            + (n // 2 if include_kepler else 0)
+        )
+        if count > max_features:
+            raise ValueError(f"dictionary would contain {count} features, budget is {max_features}")
+        if include_kepler and n % 2:
+            raise ValueError("Kepler terms require canonical q,p coordinates")
+        if scaling_weights is not None and len(scaling_weights) != n:
+            raise ValueError("one scaling weight per variable is required")
+        if variable_units is not None and (
+            len(variable_units) != n or len({len(u) for u in variable_units}) != 1
+        ):
+            raise ValueError("invalid variable units")
+        if include_kepler and (scaling_weights is not None or variable_units is not None):
+            raise ValueError(
+                "supply radial units/scaling explicitly in a custom library; automatic Kepler filtering is unsupported"
+            )
+        if (
+            variable_units is not None
+            and target_units is not None
+            and len(variable_units[0]) != len(target_units)
+        ):
+            raise ValueError("target and variable unit dimensions differ")
+        self.variable_names = list(variable_names)
+        self.features = []
+        for degree in range(max_poly_order + 1):
+            for indices in combinations_with_replacement(range(n), degree):
+                if scaling_weights is not None and target_scaling is not None:
+                    weight = sum(scaling_weights[i] for i in indices)
+                    if abs(weight - target_scaling) > 1e-12:
+                        continue
+                if variable_units is not None and target_units is not None:
+                    units = tuple(
+                        sum(variable_units[i][k] for i in indices) for k in range(len(target_units))
+                    )
+                    if units != tuple(target_units):
+                        continue
+                name = " ".join(variable_names[i] for i in indices) or "1"
+                self.features.append(("poly", indices, name))
+        if include_trig:
+            for i, name in enumerate(variable_names):
+                dimensionless = variable_units is None or not any(variable_units[i])
+                target_dimensionless = target_units is None or not any(target_units)
+                scale_ok = scaling_weights is None or (
+                    scaling_weights[i] == 0 and target_scaling in (None, 0)
+                )
+                if dimensionless and target_dimensionless and scale_ok:
+                    for op in ("sin", "cos"):
+                        self.features.append((op, (i,), f"\\{op}({name})"))
+        if include_kepler:
+            for i in range(n // 2):
+                self.features.append(("radial", (i,), f"{variable_names[i]}/r"))
+        if not self.features:
+            raise ValueError("dimensional/scaling filters eliminated all features")
+
+    def build_library(self, z):
+        if z.ndim != 2 or z.shape[1] != len(self.variable_names) or not torch.isfinite(z).all():
+            raise ValueError("expected finite [B,variable_count]")
+        values = []
+        for op, indices, _ in self.features:
+            if op == "poly":
+                value = z[:, list(indices)].prod(-1) if indices else torch.ones_like(z[:, 0])
+            elif op == "sin":
+                value = z[:, indices[0]].sin()
+            elif op == "cos":
+                value = z[:, indices[0]].cos()
+            else:
+                radius = torch.linalg.vector_norm(z[:, : z.shape[1] // 2], dim=-1)
+                if (radius <= torch.finfo(z.dtype).eps).any():
+                    raise ValueError("Kepler dictionary undefined at collision r=0")
+                value = z[:, indices[0]] / radius
+            values.append(value)
+        return torch.stack(values, -1), [f[2] for f in self.features]
+
+    def gradient_library(self, z):
+        point = z.detach().requires_grad_(True)
+        values, names = self.build_library(point)
+        gradients = []
+        for column in values.unbind(-1):
+            gradient = (
+                torch.autograd.grad(column.sum(), point, retain_graph=True)[0]
+                if column.requires_grad
+                else torch.zeros_like(point)
+            )
+            gradients.append(gradient)
+        return torch.stack(gradients, 1), names
+
+    def conservation_constraints(self, z, vector_field_fn):
+        gradients, _ = self.gradient_library(z)
+        field = vector_field_fn(z).detach()
+        return torch.einsum("bmn,bn->bm", gradients, field)
+
+================================================================================
+FILE: cnge_v2/symmetry_engine/__init__.py
+SHA256: 827c0931e913335a751680c56dba2b9a0de577c88320d41dba4f1850832c4f28
+================================================================================
+"""CNGE-v2 symmetry_engine components."""
+
+================================================================================
+FILE: cnge_v2/symmetry_engine/gauge_fixed_noether.py
+SHA256: 3bfb14450bb94f6402fe70f66df3bc79edc38e9970415e1a0ea90f0e37d624bc
+================================================================================
+import weakref
+
+import torch
+from torch import nn
+
+from cnge_engine.dynamics.hamiltonian_nn import smooth_mlp
+from cnge_engine.math_core.symplectic import scalar_gradient
+
+from ..manifold.canonical_symplectic import SymplecticStructure
+
+
+class DegenerateGaugeError(RuntimeError):
+    """No normalized independent scalar generator exists for this candidate/reference set."""
+
+
+class GaugeFixedNoetherMiner(nn.Module):
+    """Sobolev Gram-Schmidt of scalar functions; never divides by u^T J u.
+
+    Gauge coefficients are constant with respect to query z, preserving integrability.
+    Guarantees concern the fixed reference set, not every point of phase space.
+    """
+
+    def __init__(self, spatial_dim, hidden_dim=64, orth_weight=5.0, norm_weight=10.0):
+        super().__init__()
+        self.structure = SymplecticStructure(spatial_dim)
+        self.network = smooth_mlp(2 * spatial_dim, (hidden_dim, hidden_dim))
+        # The gauge removes additive constants exactly; do not optimize an unidentifiable bias.
+        self.network[-1].register_parameter("bias", None)
+        self.orth_weight, self.norm_weight = orth_weight, norm_weight
+        self.register_buffer("reference", torch.empty(0, 2 * spatial_dim))
+        self._hamiltonian = None
+
+    def set_reference(self, points, H_model):
+        if (
+            points.ndim != 2
+            or len(points) < 4
+            or points.shape[-1] != self.structure.J.shape[0]
+            or not torch.isfinite(points).all()
+        ):
+            raise ValueError("need at least four finite phase-space reference points")
+        self.reference = points.detach().clone()
+        self._hamiltonian = weakref.ref(H_model)
+
+    def _gauge(self):
+        H_model = self._hamiltonian() if self._hamiltonian else None
+        if H_model is None or not len(self.reference):
+            raise RuntimeError("call set_reference(points, H_model) before evaluating the miner")
+        with torch.enable_grad():
+            reference = self.reference.detach().requires_grad_(True)
+            f, h = self.network(reference), H_model(reference)
+            df, dh = scalar_gradient(f, reference), scalar_gradient(h, reference)
+            h_norm = dh.square().sum(-1).mean()
+            eps = 100 * torch.finfo(reference.dtype).eps
+            if not torch.isfinite(h_norm) or float(h_norm.detach()) <= eps:
+                raise DegenerateGaugeError("Hamiltonian is locally constant on reference set")
+            coefficient = (df * dh).sum(-1).mean() / h_norm
+            residual_gradient = df - coefficient * dh
+            squared_norm = residual_gradient.square().sum(-1).mean()
+            perpendicular = (
+                residual_gradient
+                - (
+                    (residual_gradient * dh).sum(-1, keepdim=True)
+                    / dh.square().sum(-1, keepdim=True).clamp_min(eps)
+                )
+                * dh
+            )
+            independent = perpendicular.square().sum(-1).mean()
+            if not torch.isfinite(squared_norm) or float(squared_norm.detach()) <= eps:
+                raise DegenerateGaugeError("constant or energy-alias candidate rejected")
+            if float(independent.detach() / squared_norm.detach()) <= eps:
+                raise DegenerateGaugeError("candidate is functionally dependent on energy")
+            scale = squared_norm.sqrt()
+        return H_model, coefficient, f.mean(), h.mean(), scale
+
+    def forward(self, z):
+        H, a, f_mean, h_mean, scale = self._gauge()
+        return (self.network(z) - f_mean - a * (H(z) - h_mean)) / scale
+
+    def compute_orthogonalized_loss(self, z, H_model):
+        if not len(self.reference):
+            self.set_reference(z, H_model)
+        elif self._hamiltonian() is not H_model:
+            self.set_reference(self.reference, H_model)
+        with torch.enable_grad():
+            point = z.detach().requires_grad_(True)
+            Q, H = self(point), H_model(point)
+            dq, dh = scalar_gradient(Q, point), scalar_gradient(H, point)
+            bracket = self.structure.pairing(dq, dh)
+            comm = bracket.square().mean()
+            orth = (dq * dh).sum(-1).mean().square() / (
+                dq.square().sum(-1).mean() * dh.square().sum(-1).mean()
+            ).clamp_min(torch.finfo(point.dtype).eps)
+            norm = (dq.square().sum(-1).mean() - 1).square()
+            total = comm + self.orth_weight * orth + self.norm_weight * norm
+            metrics = {
+                "commutator": float(comm.detach()),
+                "orthogonality": float(orth.detach()),
+                "unit_norm_loss": float(norm.detach()),
+            }
+            del Q, H, dq, dh, bracket
+        return total, metrics
+
+================================================================================
+FILE: cnge_v2/symmetry_engine/lie_bracket_algebra.py
+SHA256: f6a13ba87f1685ac059bf8abb6593883a5d3cc56d705db4c3d55a4e4b74b5eca
+================================================================================
+from cnge_engine.math_core.lie_algebra import LieAlgebraEngine
+
+
+class LieBracketAlgebra(LieAlgebraEngine):
+    """Exact differentiable JVP brackets and sampled structure constants."""
+
+================================================================================
+FILE: cnge_v2/verification/__init__.py
+SHA256: 107c17b990303f6c94148a1cbc8dbcdc9c3dacd1adb83f83d45f80097176d25f
+================================================================================
+"""CNGE-v2 verification components."""
+
+================================================================================
+FILE: cnge_v2/verification/conftest.py
+SHA256: 991c8c88ca08d975fc13a2b6849f3b06f258db7fbdfd07797b9f3789c1785447
+================================================================================
+import pytest
+import torch
+
+
+@pytest.fixture(autouse=True)
+def reproducible():
+    torch.manual_seed(41)
+    torch.set_num_threads(1)
+
+================================================================================
+FILE: cnge_v2/verification/test_gauge_and_pipeline.py
+SHA256: 2cc20d6e97be1a0937b2565c7a1d3627252d922be0bfbd65bd7fdede2e2aa3f3
+================================================================================
+import pytest
+import torch
+
+from cnge_engine.math_core.symplectic import scalar_gradient
+from cnge_v2 import V2EngineConfig
+from cnge_v2.execution.live_orchestrator import LiveOrchestrator
+from cnge_v2.execution.streaming_pipeline import StreamingEpistemicPipeline
+from cnge_v2.symmetry_engine.gauge_fixed_noether import DegenerateGaugeError, GaugeFixedNoetherMiner
+
+
+class Oscillator(torch.nn.Module):
+    def forward(self, z):
+        return z.square().sum(-1, keepdim=True) / 2
+
+
+@pytest.mark.parametrize("alias", ["constant", "energy", "energy_squared"])
+def test_degenerate_generators_are_rejected(alias):
+    class Candidate(torch.nn.Module):
+        def forward(self, z):
+            energy = Oscillator()(z)
+            return (
+                torch.ones_like(energy)
+                if alias == "constant"
+                else energy
+                if alias == "energy"
+                else energy.square()
+            )
+
+    H = Oscillator()
+    miner = GaugeFixedNoetherMiner(2).double()
+    miner.network = Candidate()
+    miner.set_reference(torch.randn(48, 4, dtype=torch.float64), H)
+    with pytest.raises(DegenerateGaugeError):
+        miner(torch.randn(8, 4, dtype=torch.float64))
+
+
+def test_normalized_scalar_gauge_exact_reference_conditions_and_backward():
+    H = Oscillator()
+    miner = GaugeFixedNoetherMiner(2, hidden_dim=16).double()
+    reference = torch.randn(64, 4, dtype=torch.float64)
+    miner.set_reference(reference, H)
+    z = reference.detach().requires_grad_(True)
+    Q = miner(z)
+    gradient = scalar_gradient(Q, z)
+    assert abs(float(gradient.square().sum(-1).mean().detach()) - 1) < 1e-10
+    assert abs(float((gradient * z).sum(-1).mean().detach())) < 1e-10
+    loss, metrics = miner.compute_orthogonalized_loss(z, H)
+    loss.backward()
+    assert all(p.grad is not None and torch.isfinite(p.grad).all() for p in miner.parameters())
+    assert metrics["unit_norm_loss"] < 1e-20
+    # A Hessian of the actual scalar remains symmetric; no non-integrable pointwise projection.
+    hessian = torch.autograd.functional.hessian(
+        lambda point: miner(point[None]).sum(), reference[0]
+    )
+    torch.testing.assert_close(hessian, hessian.T, atol=1e-10, rtol=1e-10)
+
+
+def calibration_pairs():
+    angles = torch.linspace(0, 6, 40, dtype=torch.float64)
+    q0 = torch.stack((angles.cos(), angles.sin()), -1)
+    q1 = torch.stack((torch.cos(angles + 0.01), torch.sin(angles + 0.01)), -1)
+    return torch.stack((q0, q1), 1)
+
+
+async def test_pipeline_calibration_ingestion_checkpoint_and_real_learning(tmp_path):
+    config = V2EngineConfig(
+        obs_dim=2, latent_spatial_dim=1, hidden_dim=8, dtype=torch.float64, protection_mode="task"
+    )
+    pipeline = StreamingEpistemicPipeline(config)
+    with pytest.raises(RuntimeError, match="calibrate"):
+        await pipeline.ingest_sensor_tick([1.0, 0.0])
+    history = pipeline.calibrate(calibration_pairs(), steps=5)
+    assert len(history) == 5
+    before = [p.detach().clone() for p in pipeline.adapters.active_parameters()]
+    for i in range(5):
+        telemetry = await pipeline.ingest_sensor_tick(calibration_pairs()[i, 0])
+    assert telemetry["covariance_trace"] > 0
+    assert any(not torch.equal(a, b) for a, b in zip(before, pipeline.adapters.active_parameters()))
+    assert (
+        pipeline.trigger_symbolic_distillation() is None
+    )  # d=1 has no independent generic Noether generator.
+    pipeline.consolidate_task("first")
+    path = tmp_path / "model.pt"
+    pipeline.save_checkpoint(path)
+    restored = StreamingEpistemicPipeline.load_checkpoint(path)
+    assert restored.adapters.task_ids == ["first"]
+    samples = pipeline.reference
+    with pipeline.adapters.task("first"), restored.adapters.task("first"):
+        torch.testing.assert_close(pipeline.hamiltonian(samples), restored.hamiltonian(samples))
+    assert all(not p.requires_grad for p in restored.autoencoder.parameters())
+    with pytest.raises(RuntimeError, match="chart"):
+        restored.calibrate(calibration_pairs(), steps=1)
+    messages = []
+
+    async def source():
+        for pair in calibration_pairs()[:3]:
+            yield pair[0]
+
+    orchestrator = LiveOrchestrator(restored, capacity=2, callback=messages.append)
+    await orchestrator.run(source())
+    assert len(messages) == 3
+    assert not orchestrator._running
+
+
+async def test_orchestrator_producer_failure_cancels_worker():
+    pipeline = StreamingEpistemicPipeline(V2EngineConfig(2, 1, hidden_dim=8))
+    pipeline.calibrate(calibration_pairs(), steps=1)
+
+    async def broken():
+        yield [1.0, 0.0]
+        raise ValueError("sensor disconnected")
+
+    orchestrator = LiveOrchestrator(pipeline, capacity=1)
+    with pytest.raises(ExceptionGroup) as caught:
+        await orchestrator.run(broken())
+    assert any(isinstance(error, ValueError) for error in caught.value.exceptions)
+    assert not orchestrator._running
+
+
+def test_distillation_consolidates_only_validated_scalar():
+    from cnge_v2.core_dynamics.hamiltonian_surrogate import HamiltonianSurrogate
+    from cnge_v2.core_dynamics.symplectic_lora import SymplecticLoRAEngine
+    from cnge_v2.manifold.canonical_symplectic import SymplecticStructure
+
+    class Squared(torch.nn.Module):
+        def forward(self, z):
+            return z.square()
+
+    class ExactEnergy(HamiltonianSurrogate):
+        def __init__(self):
+            torch.nn.Module.__init__(self)
+            self.structure = SymplecticStructure(2, dtype=torch.float64)
+            self.network = torch.nn.Sequential(
+                Squared(), torch.nn.Linear(4, 1, bias=False, dtype=torch.float64)
+            )
+            with torch.no_grad():
+                self.network[-1].weight.fill_(0.5)
+
+    class Angular(torch.nn.Module):
+        def forward(self, z):
+            return z[:, :1] * z[:, 3:4] - z[:, 1:2] * z[:, 2:3]
+
+    config = V2EngineConfig(
+        4, 2, hidden_dim=8, dtype=torch.float64, stlsq_threshold=0.001, protection_mode="task"
+    )
+    pipeline = StreamingEpistemicPipeline(config)
+    samples = torch.randn(128, 4, dtype=torch.float64)
+    pipeline.calibrate(torch.stack((samples, samples), 1), steps=1)
+    pipeline.reference = samples
+    pipeline.hamiltonian = ExactEnergy()
+    pipeline.adapters = SymplecticLoRAEngine(pipeline.hamiltonian, rank=1, protection_mode="task")
+    pipeline.miner.network = Angular()
+    pipeline.miner.set_reference(samples, pipeline.hamiltonian)
+    result = pipeline.trigger_symbolic_distillation()
+    assert result is not None
+    assert result["r2"] > 0.999999
+    assert pipeline.adapters.task_ids == ["discovery_1"]
+    assert len(pipeline.discoveries) == 1
+    # No consolidation if the variance gate fails; adapter state remains unchanged.
+    pipeline.config = V2EngineConfig(
+        4, 2, hidden_dim=8, dtype=torch.float64, min_discovery_variance=1e9, protection_mode="task"
+    )
+    assert pipeline.trigger_symbolic_distillation() is None
+    assert pipeline.adapters.task_ids == ["discovery_1"]
+
+================================================================================
+FILE: cnge_v2/verification/test_latent_symplectic_recovery.py
+SHA256: 663ec2e6c3ea3241da87a0dfcf8f5f92428349dd2969a6a03d250808ba905c3e
+================================================================================
+import pytest
+import torch
+
+from cnge_v2.manifold.canonical_symplectic import SymplecticStructure
+from cnge_v2.manifold.variational_autoencoder import SymplecticAutoencoder
+from cnge_v2.solvers.implicit_midpoint import ImplicitMidpointSolver
+from cnge_v2.solvers.kalman_manifold_filter import SymplecticEKF
+
+
+def test_autoencoder_jvp_and_hamiltonian_backward():
+    model = SymplecticAutoencoder(8, 2, hidden_dim=16).double()
+    energy = torch.nn.Linear(4, 1).double()
+    observations = torch.randn(16, 2, 8, dtype=torch.float64)
+    losses = model.compute_loss(observations, 0.1, energy)
+    losses["total_loss"].backward()
+    assert all(torch.isfinite(loss) for loss in losses.values())
+    assert model.encoder[0].weight.grad.abs().max() > 0
+    assert model.decoder[0].weight.grad.abs().max() > 0
+    assert energy.weight.grad.abs().max() > 0
+    with pytest.raises(ValueError):
+        model.compute_loss(observations, 0, energy)
+
+
+def test_noisy_128d_full_state_observation_denoising(record_property):
+    # Identifiable full-state telemetry, explicitly NOT a single position-only pendulum image.
+    model = SymplecticAutoencoder(
+        128, 1, hidden_dim=32, tangent_weight=0, prediction_weight=0
+    ).double()
+    projection, _ = torch.linalg.qr(torch.randn(128, 2, dtype=torch.float64))
+    state = torch.randn(256, 2, dtype=torch.float64) * 0.5
+    clean = state @ projection.T
+    noise_scale = 0.15 * clean.std()
+    noisy = clean + noise_scale * torch.randn_like(clean)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+    initial = float((model(noisy)[1] - clean).square().mean().detach())
+    # Independent noisy reconstructions require no privileged physical-state targets in training.
+    for _ in range(350):
+        optimizer.zero_grad()
+        _, reconstructed = model(noisy)
+        loss = (reconstructed - noisy).square().mean()
+        loss.backward()
+        optimizer.step()
+    test_state = torch.randn(256, 2, dtype=torch.float64) * 0.5
+    test_clean = test_state @ projection.T
+    test_noisy = test_clean + noise_scale * torch.randn_like(test_clean)
+    with torch.no_grad():
+        latent, reconstructed = model(test_noisy)
+        r2 = 1 - (reconstructed - test_clean).square().sum() / test_clean.square().sum()
+        training_latent = model.encoder(noisy)
+        alignment = torch.linalg.lstsq(
+            torch.cat((training_latent, torch.ones(256, 1, dtype=latent.dtype)), 1), state
+        ).solution
+        aligned = torch.cat((latent, torch.ones(256, 1, dtype=latent.dtype)), 1) @ alignment
+        aligned_r2 = 1 - (aligned - test_state).square().sum() / test_state.square().sum()
+    assert initial > float((reconstructed - test_clean).square().mean()) * 10
+    record_property("observation_r2", float(r2))
+    record_property("affine_aligned_latent_r2", float(aligned_r2))
+    assert r2 > 0.98
+    assert aligned_r2 > 0.98  # Diagnostic affine alignment, not canonical-identifiability proof.
+
+
+def test_position_only_pixels_do_not_identify_momentum():
+    model = SymplecticAutoencoder(128, 1)
+    same_image = torch.randn(1, 128).expand(2, -1)
+    latent, _ = model(same_image)
+    assert torch.equal(latent[0], latent[1])
+    momenta = torch.tensor([-1.0, 1.0])
+    assert (latent[:, 1] - momenta).square().mean() >= 1  # An information-theoretic obstruction.
+
+
+def test_latent_flow_is_symplectic_but_rectangular_encoder_has_no_canonical_defect():
+    structure = SymplecticStructure(2, dtype=torch.float64)
+    z = torch.randn(4, dtype=torch.float64, requires_grad=True)
+    solver = ImplicitMidpointSolver(tol=1e-14, max_iter=30)
+
+    def flow(point):
+        return solver.integrate_step(point[None], lambda x: structure.symplectic_gradient(x), 0.03)[
+            0
+        ]
+
+    jacobian = torch.autograd.functional.jacobian(flow, z)
+    assert structure.pullback_defect(jacobian).norm() < 1e-10
+    with pytest.raises(ValueError, match="square"):
+        structure.pullback_defect(torch.randn(4, 128, dtype=z.dtype))
+    u = torch.randn(16, 4, dtype=z.dtype)
+    assert structure.pairing(u, u).abs().max() < 1e-14
+
+
+def test_ekf_reduces_noise_and_joseph_covariance_is_psd():
+    dtype = torch.float64
+    structure = SymplecticStructure(1, dtype=dtype)
+    ekf = SymplecticEKF(1, Q_cov=1e-6, R_cov=0.15**2)
+    solver = ImplicitMidpointSolver()
+    true = torch.tensor([[1.0, 0.2]], dtype=dtype)
+    state = true.clone()
+    P = torch.eye(2, dtype=dtype)[None] * 0.01
+    raw_errors, filtered_errors = [], []
+    for _ in range(100):
+        true = solver.integrate_step(true, lambda z: structure.symplectic_gradient(z), 0.03)
+        observed = true + 0.15 * torch.randn_like(true)
+        prior, covariance = ekf.predict(state, P, lambda z: structure.symplectic_gradient(z), 0.03)
+        state, P = ekf.update(prior, covariance, observed, lambda z: z)
+        raw_errors.append((observed - true).square().mean())
+        filtered_errors.append((state - true).square().mean())
+        assert torch.linalg.eigvalsh(P).min() >= -1e-12
+        torch.testing.assert_close(P, P.transpose(-1, -2), atol=1e-12, rtol=1e-12)
+    assert torch.stack(filtered_errors).mean() < 0.2 * torch.stack(raw_errors).mean()
+
+
+def test_tangent_noise_weight_does_not_explode_as_dt_shrinks():
+    model = SymplecticAutoencoder(2, 1, hidden_dim=8, observation_noise_variance=0.1).double()
+    H = lambda z: z.square().sum(-1, keepdim=True) / 2
+    x = torch.randn(8, 2, 2, dtype=torch.float64)
+    first = model.compute_loss(x, 0.01, H)
+    second = model.compute_loss(x, 0.001, H)
+    assert second["total_loss"] < 2 * first["total_loss"]
+
+
+def test_history_distinguishes_opposite_motion_at_same_position():
+    from cnge_v2.execution.observation_history import ObservationHistory
+
+    left = ObservationHistory(1, length=3)
+    right = ObservationHistory(1, length=3)
+    for a, b in zip((-0.2, -0.1, 0.0), (0.2, 0.1, 0.0)):
+        previous = left.update([a])
+        current = right.update([b])
+    assert previous[-1] == current[-1]
+    assert not torch.equal(previous, current)
+    assert len(left.frames) == 3
+    left.update([0.1])
+    assert len(left.frames) == 3
+    left.reset()
+    assert left.update([0.0]) is None
+
+================================================================================
+FILE: cnge_v2/verification/test_stlsq_convergence.py
+SHA256: 7895f60311a18eddd3e1e67de35939d72a94499b626c97188e7b1a654ece9eb5
+================================================================================
+import time
+
+import numpy as np
+import pytest
+import torch
+
+from cnge_v2.symbolic_distiller.constrained_stlsq import ConstrainedSTLSQ
+from cnge_v2.symbolic_distiller.functional_dictionary import FunctionalDictionary
+
+
+def kepler_data(seed, count=512):
+    rng = np.random.default_rng(seed)
+    z = rng.normal(size=(count, 6))
+    z[:, :3] += np.array([2.0, 0, 0])
+    q, p = z[:, :3], z[:, 3:]
+    angular = np.cross(q, p)
+    A = np.cross(p, angular) - q / np.linalg.norm(q, axis=1, keepdims=True)
+    return z, A[:, 0]
+
+
+def test_kepler_runge_lenz_five_term_recovery_and_timing(record_property):
+    z, target = kepler_data(3)
+    library = FunctionalDictionary(
+        ["q_0", "q_1", "q_2", "p_0", "p_1", "p_2"], include_trig=True, include_kepler=True
+    )
+    X, names = library.build_library(torch.from_numpy(z))
+    solver = ConstrainedSTLSQ(threshold=0.05)
+    start = time.perf_counter()
+    formula, coefficients, r2 = solver.fit(X.numpy(), target, names)
+    elapsed = time.perf_counter() - start
+    record_property("fit_seconds", elapsed)
+    record_property("r2", r2)
+    assert elapsed < 0.2, f"STLSQ took {elapsed:.3f}s on this CPU"
+    assert r2 > 0.999
+    assert np.count_nonzero(coefficients) == 5
+    other, actual = kepler_data(19)
+    values, _ = library.build_library(torch.from_numpy(other))
+    predicted = values.numpy() @ coefficients
+    assert 1 - np.mean((predicted - actual) ** 2) / np.var(actual) > 0.999
+    assert "q_0/r" in formula
+    assert solver.n_iter_ <= solver.max_iter
+
+
+def test_scaling_and_unit_filters_are_applied_before_regression():
+    library = FunctionalDictionary(
+        ["q_0", "p_0"], include_trig=True, scaling_weights=[1, 1], target_scaling=2
+    )
+    _, names = library.build_library(torch.randn(10, 2))
+    assert set(names) == {"q_0 q_0", "q_0 p_0", "p_0 p_0"}
+    units = FunctionalDictionary(
+        ["q_0", "p_0"], variable_units=[(1, 0), (0, 1)], target_units=(1, 1)
+    )
+    _, names = units.build_library(torch.randn(4, 2))
+    assert names == ["q_0 p_0"]
+    with pytest.raises(ValueError, match="budget"):
+        FunctionalDictionary([str(i) for i in range(100)], max_poly_order=5)
+
+
+def test_homogeneous_symmetry_constraints_and_gradient_distillation():
+    rng = np.random.default_rng(8)
+    X = rng.normal(size=(128, 4))
+    target = X @ np.array([1.0, 1.0, 0.0, 0.0])
+    _, coef, r2 = ConstrainedSTLSQ().fit(
+        X, target, ["a", "b", "c", "d"], constraints=np.array([[1.0, -1.0, 0.0, 0.0]])
+    )
+    assert r2 > 0.999999
+    assert abs(coef[0] - coef[1]) < 1e-12
+    z = torch.randn(128, 4, dtype=torch.float64)
+    library = FunctionalDictionary(
+        ["q_0", "q_1", "p_0", "p_1"], max_poly_order=2, include_trig=False
+    )
+    gradient = torch.stack((z[:, 3], -z[:, 2], -z[:, 1], z[:, 0]), -1)
+    _, coefficients, r2 = ConstrainedSTLSQ().fit_gradient(library, z, gradient)
+    assert r2 > 0.999999
+    assert np.count_nonzero(coefficients) == 2
+
+
+def test_empty_support_rank_deficiency_and_invalid_inputs():
+    X = np.ones((32, 3))
+    _, coefficients, r2 = ConstrainedSTLSQ(threshold=100).fit(X, np.zeros(32), ["a", "b", "c"])
+    assert not np.any(coefficients)
+    assert r2 == 1
+    with pytest.raises(ValueError):
+        ConstrainedSTLSQ().fit(X, np.full(32, np.nan), ["a", "b", "c"])
+    with pytest.raises(ValueError, match="collision"):
+        FunctionalDictionary(["q_0", "p_0"], include_kepler=True).build_library(torch.zeros(1, 2))
+
+================================================================================
+FILE: cnge_v2/verification/test_zero_forgetting_lora.py
+SHA256: 50856580db885746c628351508fff96c4ed3538d0e491e46535df4acda5f6f71
+================================================================================
+import io
+
+import pytest
+import torch
+
+from cnge_v2.core_dynamics.hamiltonian_surrogate import HamiltonianSurrogate
+from cnge_v2.core_dynamics.symplectic_lora import ActivationCapacityError, SymplecticLoRAEngine
+from cnge_v2.solvers.implicit_midpoint import ImplicitMidpointSolver
+
+
+def test_overlapping_activation_subspaces_use_union_not_sum():
+    engine = SymplecticLoRAEngine(torch.nn.Sequential(torch.nn.Linear(4, 2, bias=False)), rank=2)
+    layer = engine.layers["0"]
+    basis = torch.eye(4)[:, :1]
+    engine.register_frozen_invariant_adapter("first", engine.active_adapter_state(), basis)
+    engine.register_frozen_invariant_adapter("second", engine.active_adapter_state(), basis)
+    assert layer.U.shape == (4, 1)
+    raw = torch.randn(2, 4)
+    projected = engine.get_orthogonalized_gradient("0", raw)
+    assert (projected @ basis).abs().max() < 1e-6
+    with torch.no_grad():
+        layer.A.fill_(1)
+        layer.B.fill_(1)
+    x = torch.eye(4)[:1]
+    with engine.task("second"):
+        previous = engine(x)
+    torch.testing.assert_close(engine(x), previous)
+    assert (engine(torch.eye(4)[1:2]) - layer.base(torch.eye(4)[1:2])).abs().max() > 0
+
+
+def test_capacity_exhaustion_is_explicit():
+    engine = SymplecticLoRAEngine(torch.nn.Sequential(torch.nn.Linear(2, 2)), rank=2)
+    engine.register_frozen_invariant_adapter("full", engine.active_adapter_state(), torch.eye(2))
+    with pytest.raises(ActivationCapacityError):
+        engine.assert_plastic_capacity()
+
+
+def test_task_routed_sequential_dynamics_learning_and_lz_retention(record_property):
+    class PolynomialEnergy(HamiltonianSurrogate):
+        def __init__(self):
+            torch.nn.Module.__init__(self)
+            self.linear = torch.nn.Linear(3, 1, bias=False, dtype=torch.float64)
+            with torch.no_grad():
+                self.linear.weight[:] = torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float64)
+            from cnge_v2.manifold.canonical_symplectic import SymplecticStructure
+
+            self.structure = SymplecticStructure(2, dtype=torch.float64)
+
+        def energy(self, z):
+            q, p = z.chunk(2, -1)
+            features = torch.stack(
+                (
+                    q.square().sum(-1) / 2,
+                    q.pow(4).sum(-1),
+                    q[:, 0] ** 2 * q[:, 1] - q[:, 1] ** 3 / 3,
+                ),
+                -1,
+            )
+            return p.square().sum(-1, keepdim=True) / 2 + self.linear(features)
+
+    model = PolynomialEnergy()
+    engine = SymplecticLoRAEngine(model, rank=1, protection_mode="task")
+    z = torch.randn(128, 4, dtype=torch.float64) * 0.3
+    baseline = engine(z).detach().clone()
+    engine.register_frozen_invariant_adapter(
+        "oscillator", engine.active_adapter_state(), engine.capture_activation_subspaces(z)
+    )
+    for name, coefficients in [("quartic", [0.0, 0.2, 0.0]), ("henon_heiles", [1.0, 0.0, 0.15])]:
+        optimizer = torch.optim.Adam(engine.active_parameters(), lr=0.04)
+        desired = torch.tensor(coefficients, dtype=z.dtype)
+        q, p = z.chunk(2, -1)
+        features = torch.stack(
+            (q.square().sum(-1) / 2, q.pow(4).sum(-1), q[:, 0] ** 2 * q[:, 1] - q[:, 1] ** 3 / 3),
+            -1,
+        )
+        target = p.square().sum(-1, keepdim=True) / 2 + (features @ desired)[:, None]
+        initial = (engine(z) - target).square().mean().item()
+        for _ in range(250):
+            optimizer.zero_grad()
+            loss = (engine(z) - target).square().mean()
+            loss.backward()
+            optimizer.step()
+        assert (engine(z) - target).square().mean().item() < initial * 0.01
+        with engine.task("oscillator"):
+            assert torch.equal(engine(z), baseline)
+        engine.register_frozen_invariant_adapter(
+            name, engine.active_adapter_state(), engine.capture_activation_subspaces(z)
+        )
+    point = torch.tensor([[1.0, 0.0, 0.0, 1.0]], dtype=z.dtype)
+    solver = ImplicitMidpointSolver(tol=1e-13, max_iter=30)
+    max_drift = 0.0
+    with engine.task("oscillator"):
+        for _ in range(500):
+            point = solver.integrate_step(point, model.vector_field, 0.01).detach()
+            L = point[:, 0] * point[:, 3] - point[:, 1] * point[:, 2]
+            max_drift = max(max_drift, abs(float(L) - 1))
+            assert abs(float(L) - 1) < 1e-4
+    # Explicitly task-conditioned retention; the active quartic/HH fields need not conserve Lz.
+    record_property("routed_oscillator_max_lz_drift", max_drift)
+    assert len(engine.task_ids) == 3
+
+
+def test_adapter_state_dict_roundtrip_and_transactional_validation():
+    engine = SymplecticLoRAEngine(torch.nn.Sequential(torch.nn.Linear(4, 3)), rank=2)
+    x = torch.randn(20, 4)
+    with torch.no_grad():
+        engine.layers["0"].B.normal_()
+    before = engine(x).detach()
+    engine.register_frozen_invariant_adapter(
+        "saved", engine.active_adapter_state(), torch.eye(4)[:, :2]
+    )
+    storage = io.BytesIO()
+    torch.save(engine.state_dict(), storage)
+    storage.seek(0)
+    restored = SymplecticLoRAEngine(torch.nn.Sequential(torch.nn.Linear(4, 3)), rank=2)
+    restored.load_state_dict(torch.load(storage, weights_only=True))
+    with restored.task("saved"):
+        torch.testing.assert_close(restored(x), before)
+    with pytest.raises(ValueError):
+        restored.register_frozen_invariant_adapter(
+            "bad", restored.active_adapter_state(), torch.randn(6, 2)
+        )
+    assert restored.task_ids == ["saved"]
+
+================================================================================
+FILE: docs/LEGACY_V1.md
+SHA256: 7b626b35981aed8da9afbef12f0dbb0d518b9c997282b4078a184158456ebf77
+================================================================================
+> Histórico v1. O fluxo recomendado atual está no README da raiz. As medições abaixo pertencem à implementação anterior.
+
+# CNGE — Continuous Neuro-Geometric Epistemic Engine
+
+Implementação de referência executável da arquitetura neurogeométrica do anexo, em Python/PyTorch. Inclui os 22 módulos especificados, testes, demonstração científica, runtime de aprendizado online, transporte WebSocket e uma interface de inspeção em canvas.
+
+**Estado:** pesquisa/desenvolvimento. As metas de descoberta autônoma geral, retenção perfeita, prova física, desempenho GPU e operação de produção ainda não estão demonstradas. Consulte [limites e correspondência com o pedido](VALIDATION.md).
+
+## Instalação
+
+Python 3.11+ (validado localmente com Python 3.12). CPU não requer GPU, câmera, serviços externos ou credenciais:
+
+```bash
+cd /workspace/CNGE
+python -m venv .venv
+.venv/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+.venv/bin/python -m pip install -e '.[dev]'
+.venv/bin/python -m pip check
+```
+
+Em uma máquina CUDA, instale primeiro a distribuição de PyTorch adequada ao driver usando as instruções oficiais do PyTorch, e selecione `EngineConfig(device="cuda")`. Não presuma disponibilidade de GPU. Cada tarefa cloud já é isolada: use o checkout existente, sem criar worktrees.
+
+## Executar e verificar
+
+```bash
+.venv/bin/cnge-demo --steps 1000 --output artifacts/demo.json
+.venv/bin/pytest -q
+.venv/bin/pytest --long -m long -q  # três testes de 50.000 passos; cerca de 14 minutos nesta CPU
+.venv/bin/ruff check cnge_engine tests tools
+.venv/bin/ruff format --check cnge_engine tests tools
+.venv/bin/python -m build
+```
+
+A demonstração integra o oscilador harmônico isotrópico 3D, verifica um invariante analítico conhecido, sintetiza `L_z = q_x p_y - q_y p_x`, verifica a expressão em pontos separados e a registra na gramática. O relatório distingue esse exercício de uma descoberta neural autônoma.
+
+## Interface e aprendizado online
+
+```bash
+.venv/bin/python tools/live_demo.py
+# Execução finita, útil para smoke test:
+.venv/bin/python tools/live_demo.py --steps 100
+```
+
+O processo inicia HTTP na porta 8081 e WebSocket na 8080, ambos em loopback. Para acesso local, abra o arquivo servido pelo HTTP no navegador da mesma máquina. A interface mostra `(q₁,q₂,p₁)`, métricas, candidatos e permite perturbações e restrição rotacional xy. Essa é uma projeção visual, não uma transformação simplética em 3D. Os processos não sobrevivem a snapshots: reinicie o comando quando necessário. `Ctrl+C` fecha o runtime e os servidores. Não exponha esse servidor sem autenticação e uma configuração de implantação própria.
+
+Para outros sensores, forneça um iterador assíncrono de coordenadas `[d]` ao método `start_epistemic_runtime(source)` e aguarde a tarefa retornada. `stop()` cancela e coleta tarefas. A fonte deve ter período uniforme `integrator_dt` e massa constante conhecida para que a aproximação `p = m dq/dt` seja apropriada. Uma mudança de coordenadas observada não necessariamente corresponde a um impulso físico.
+
+```python
+import asyncio
+from cnge_engine import EngineConfig
+from cnge_engine.streaming.asynchronous_orchestrator import EpistemicContinuousOrchestrator
+
+async def observations():
+    for q in ([1., 0.], [.99995, .01], [.9998, .02]):
+        yield q
+
+async def main():
+    engine = EpistemicContinuousOrchestrator(EngineConfig(spatial_dim=2))
+    try:
+        await engine.start_epistemic_runtime(observations())
+        print(engine.metrics)
+    finally:
+        await engine.stop()
+
+asyncio.run(main())
+```
+
+O runtime realiza atualização Hamiltoniana por SGD com gradiente projetado, mineração Noether por Adam, replay periódico, verificação empírica e compilação condicional. A mineração e as operações tensoriais são serializadas numa tarefa cooperativa para evitar corridas nos parâmetros; não se afirma execução concorrente em streams CUDA. A busca simbólica pode bloquear brevemente o loop. Eventos externos têm fila limitada e quadros são descartados em favor do mais recente para clientes lentos.
+
+### Integrações opcionais
+
+- **Embeddings:** `pip install -e '.[semantic]'`. `FoundationEmbeddingBridge` carrega um modelo Sentence Transformers explicitamente; o download requer acesso ao Hugging Face e seus hosts de armazenamento. Não ocorre na importação do pacote. O adaptador foi testado com backend injetado; o modelo remoto não foi baixado. A projeção contrastiva precisa de pares científicos rotulados antes de uso semântico significativo.
+- **Câmera:** `pip install -e '.[camera]'`. `ContinuousSensorStream.capture(coordinate_extractor)` requer um dispositivo e uma função que transforme frames em coordenadas físicas calibradas. O código não interpreta pixels como posições ou inventa calibração.
+- **Semântica:** a tradução de restrições suporta explicitamente rotação no plano xy. Prompts arbitrários são rejeitados; a explicação apresenta a expressão e o estado empírico, sem inventar citações ou provas.
+
+## Estrutura
+
+`cnge_engine/` segue a organização do pedido: `config`, `math_core`, `dynamics`, `noether`, `crystallization`, `semantic_bridge`, `streaming` e `visualization`. Os testes ficam em `tests/`; o frontend em `web/`. O pedido original está preservado em [SPECIFICATION.txt](SPECIFICATION.txt).
+
+## Código-fonte em um único TXT
+
+[CNGE_SOURCE.txt](../CNGE_SOURCE.txt) reúne todos os arquivos de texto versionados (código, testes, interface, configuração e documentação), com caminho e SHA-256 de cada arquivo. É um arquivo de fontes concatenadas, não um executável binário. Recrie-o após alterar os fontes:
+
+```bash
+git add .
+.venv/bin/python tools/export_source.py
+```
+
+O exportador exclui a si próprio como **saída** (`CNGE_SOURCE.txt`), mas inclui seu script, e não inclui `.venv`, caches, artefatos ou credenciais. A distribuição Python compilada/empacotada fica em `dist/` após `python -m build`.
+
+### Teste do navegador
+
+Com o servidor de demonstração ativo, execute `node tools/browser_smoke.cjs` em um ambiente com Playwright e Chromium. Se necessário, instale o cliente com `npm install --prefix /tmp/cnge-browser playwright` e use `NODE_PATH=/tmp/cnge-browser/node_modules node tools/browser_smoke.cjs`. `CHROMIUM_PATH` seleciona o executável Chromium instalado. O teste verifica telemetria real, intervenções, erros JavaScript e layout móvel.
+
+================================================================================
+FILE: docs/PULL_REQUEST.md
+SHA256: fcf2867279cc3c4e9da15bdb4467276017910836d457bd71cdf8d9700b692891
+================================================================================
+# Implement CNGE-v2: latent filtering, constrained sparse distillation and continual adapters
+
+The v1 pipeline derives momenta from finite differences, enumerates AST candidates, uses soft symmetry-degeneracy penalties and projects gradients in parameter space. This change introduces a recommended CNGE-v2 pipeline: differential coordinate learning and an EKF, bounded functional dictionaries with constrained STLSQ, a normalized scalar-function gauge, and low-rank energy adapters. Legacy APIs remain explicitly available for compatibility; the new pipeline does not execute those four legacy heuristics.
+
+The requested symplectic Gram–Schmidt formula divides by `uᵀJu=0`; V2 uses a positive Sobolev scalar-function gauge instead, rejects constants/energy aliases and retains integrable scalar generators. LoRA offers explicit finite activation-space protection and exact named task snapshots as distinct policies, with capacity errors and a frozen coordinate chart. It does not claim unconditional zero forgetting over unlimited tasks. The dictionary adds radial terms needed for exact Kepler recovery and supports joint homogeneous conservation constraints.
+
+The implementation includes calibrated streaming, bounded asynchronous ingestion, Joseph-form EKF covariance updates, checkpoint roundtrips, sparse gradient distillation, CPU demos, CI and a deterministic complete-source TXT. The legacy modules and UI remain available explicitly for compatibility.
+
+Validation: 58 tests passed; three unchanged legacy long tests were explicitly skipped in the current run. An installed wheel completed the v2 smoke demo outside the checkout. See `docs/V2_RESULTS.md` for quantitative results and executed checks and quantitative results, and `docs/V2_VALIDATION.md` for the requested acceptance criteria and their mathematical limits. CPU tests distinguish identifiable noisy full-state telemetry from ambiguous position-only images, exact sparse recovery from autonomous neural discovery, and task-conditioned retention from unrestricted activation-space claims. GPU/real-camera production operation remains unvalidated.
 
 ================================================================================
 FILE: docs/RESULTS.md
@@ -2343,6 +4459,127 @@ cnge_engine/
     real time.
 
 ================================================================================
+FILE: docs/V2_RESULTS.md
+SHA256: 65a8acf25ba5ec25ba7e2e495cd4eb1efc1caed9ff5866fd6914309bcd6eae75
+================================================================================
+# CNGE-v2: local validation results
+
+Local CPU validation, Python 3.12, PyTorch 2.15.0+cpu, NumPy 2.5.4. CPU numerical tests and benchmarks use one PyTorch/BLAS thread. No GPU was available. These are observed results, not universal hardware guarantees.
+
+## Executed current checks
+
+- **58 tests passed**, zero failures, in approximately **5 seconds**: 36 legacy fast tests and 22 v2 tests. Three legacy long tests were explicitly skipped in this invocation.
+- `ruff check` and `ruff format --check`: passed for both packages, tests and tools.
+- Bytecode compilation of v2 and `pip check`: passed.
+- Wheel and source distribution builds passed. A wheel installed outside the checkout executed the v2 smoke demo successfully; the source distribution was checked for v2 code, verification tests, tools, interface and the complete TXT.
+- Full v2 demo: 40 calibration steps and 20 online observation ticks completed. Calibration objective decreased from **0.727947** to **0.417233**. Last posterior covariance trace: **0.00029819**. This smoke run does not establish accurate physical coordinate identification or successful autonomous invariant discovery; its Noether residual did not satisfy the discovery gate, so no discovery is asserted.
+- Calibration, real adapter parameter updates, validated symbolic consolidation, rejection without consolidation, frozen coordinate-chart enforcement, atomic checkpoint save/load, optimizer state restoration and named task prediction equivalence are exercised.
+- Bounded asynchronous producer/worker ordering and error cancellation are exercised. Camera capture and a downloaded embedding model are not prerequisites of v2 and were not validated.
+
+## Quantitative experiments
+
+| Experiment | Measured result | Scope |
+|---|---|---|
+| 128D full-state telemetry with additive Gaussian noise at 15% of signal standard deviation | Denoised held-out observation **R² = 0.99826994**; affine-aligned latent **R² = 0.99821123** | Learned bottleneck autoencoder; no physical state targets in reconstruction training. The final affine alignment uses labelled training states only as a validation diagnostic. This is **not** position-only pixel pendulum recovery or a canonical encoder proof. |
+| 3D Kepler Runge–Lenz component | **5 active terms**, fit and held-out **R² = 1.0** | Cubic/trig library plus required q_i/r terms; analytical target evaluations, not neural invariant discovery. |
+| Kepler STLSQ fit | **4.96 ms** in the test; **6.85 ms** in the demo | Warm local CPU, one BLAS thread; library construction excluded from the fit timer. Both observations satisfy the 200 ms target for this dataset. |
+| Oscillator → quartic → Hénon–Heiles adapter learning | Each new energy-fit error decreases by >100×; old named oscillator predictions are exactly unchanged | Task-routed low-rank energy adapters. This test does not claim a shared unconditioned vector field preserves all regimes. |
+| Old oscillator rollout after those updates | Maximum relative Lz drift **8.88×10⁻¹⁶** over 500 midpoint steps | Explicitly selecting the saved oscillator task; initial Lz=1, away from a singular relative normalization. |
+| EKF denoising | Average filtered state MSE below 20% of raw noisy MSE | Controlled oscillator with known dynamics and identity observation; every posterior covariance is symmetric PSD. |
+| Gauge and integration | Constants, H and H² rejected; unit RMS reference gradient, zero reference Sobolev correlation, symmetric scalar Hessian; latent flow defect <10⁻¹⁰ | Reference-set checks in float64, not a global proof for an unknown physical observation map. |
+
+Additional negative tests cover ambiguous instantaneous images, activation-capacity exhaustion, overlapping subspace bases, invalid/rank-deficient regression data, undefined Kepler collision terms, dictionary-budget rejection, missing calibration, changing a frozen chart, malformed calibration inputs, and sensor failure propagation.
+
+## Reproducibility
+
+```bash
+OPENBLAS_NUM_THREADS=1 .venv/bin/pytest -q -o junit_family=legacy --junitxml=artifacts/v2-validation.xml
+OPENBLAS_NUM_THREADS=1 .venv/bin/python -m cnge_v2.demo --output artifacts/v2-demo.json
+```
+
+The JUnit file records the numerical R², fit timing and routed Lz metrics as test properties. Times may vary. CI is configured for Python 3.11 and 3.12 but a remote CI result is not claimed until GitHub runs it.
+
+## Historical long validation
+
+The unchanged shared midpoint implementation and legacy Yoshida integrator previously completed three 50,000-step checks (150,000 steps total) in 842.43 seconds. Those results are recorded in `RESULTS.md`. The v2 change adds a direct latent midpoint Jacobian check and EKF covariance tests. The 14-minute historical suite was not rerun because the integrator implementation was unchanged; it is not counted as a fresh v2 run.
+
+## Deployment boundaries
+
+See `V2_VALIDATION.md` for the precise mathematical corrections and acceptance limits. Strict canonical recovery from ambiguous single frames, unconstrained global sparse optimality, unlimited orthogonal plasticity, context-free zero forgetting and production/GPU guarantees are not demonstrated.
+
+================================================================================
+FILE: docs/V2_VALIDATION.md
+SHA256: 9576792543a02cf4e4489357334e7b76b0d0916f903a23cc33f115f38f4d6b30
+================================================================================
+# CNGE-v2: implemented contracts and mathematical boundaries
+
+The v2 package replaces finite-difference momentum reconstruction, AST enumeration, soft degeneracy penalties and dense parameter-gradient protection in the recommended workflow. Legacy modules remain import-compatible and explicitly opt-in. V2 does not call the legacy AST compiler or parameter protector. It reuses the validated canonical autodiff primitives, smooth activations and implicit midpoint algorithm.
+
+## 1. Differential coordinate learning and noise filtering
+
+`SymplecticAutoencoder` learns an encoder/decoder with reconstruction, decoder-JVP tangent consistency and an integrated prediction residual. All temporal predictions use implicit midpoint. Solver convergence has a machine-precision floor (especially in float32) and fails explicitly when the requested iteration budget is insufficient; no infinite-horizon structural guarantee is inferred. The tangent term remains available as specified, but its contribution is normalized by `1 + 2 R/dt²` using the configured observation-noise variance. This prevents its expected white-noise contribution from diverging as the observation interval shrinks. The integrated observation loss avoids dividing noisy data by dt. Momentum is an encoder output, never a finite difference of a configuration component.
+
+This is a differential autoencoder, not a probabilistic Gaussian VAE: the requested contract specifies no posterior, prior or KL/ELBO. It imposes a Hamiltonian **latent vector field**. It does not guarantee that an arbitrary observation map is canonical or that noisy observations uniquely identify physical q and p. Such identification requires observability, sufficient data, an appropriate model and calibration of gauge/scale.
+
+A position-only image is identical for states `(q,+p)` and `(q,-p)`; a deterministic single-frame encoder cannot distinguish them. `ObservationHistory` provides bounded delay coordinates for a sensor needing temporal context. Configure `obs_dim = frame_dim × history_length` and calibrate on pairs of complete history windows. History improves observability but is not a universal proof of it.
+
+For an encoder from 128 observation dimensions to 2d latent dimensions, its Jacobian is rectangular. `Dψᵀ J Dψ` is a 128×128 pullback, not the 2d×2d canonical form in the acceptance formula. No canonical observation two-form was supplied. The meaningful structural test implemented here checks the **square latent flow Jacobian**. It does not mislabel that test as proof of canonical encoder recovery.
+
+The EKF propagates covariance with the actual midpoint Jacobian, solves the innovation system by Cholesky and uses Joseph-form covariance updates. Covariances are symmetrized and input PSD is checked. Measurement updates are dissipative statistical estimation, not symplectomorphisms; only the deterministic Hamiltonian prediction has the symplectic contract. Q and R are per-tick isotropic covariances and must be calibrated to the sensor and timestep.
+
+## 2. A well-defined scalar gauge
+
+For a real skew matrix J, `uᵀJu = 0` for every u. The proposed symplectic "norm" has a zero denominator, so it cannot define Gram–Schmidt. Also, the proposed symplectic correlation penalty is a normalized mean Poisson residual: it is zero for `Q=H` and does not exclude that candidate. A finite norm penalty leaves the constant candidate a stationary point even when its loss is nonzero.
+
+V2 instead fixes a scalar-function gauge on a persistent reference set using the positive Sobolev pairing:
+
+```
+a = mean(∇f · ∇H) / mean(||∇H||²)
+g = f − mean(f) − a (H − mean(H))
+Q = g / sqrt(mean(||∇g||²))
+```
+
+The coefficients are constant with respect to the **query phase point**, so Q remains an actual scalar and its gradient is integrable. On the reference set this gives unit RMS gradient and zero mean Euclidean gradient correlation with H. Constants, energy aliases and candidates locally functionally dependent on energy are hard-rejected with `DegenerateGaugeError`. No epsilon division fabricates a generator from an exactly degenerate candidate. The additive network bias is removed because the gauge makes it unidentifiable.
+
+These conditions are finite-reference conditions. They do not guarantee independent conserved quantities exist, optimizer convergence, or nondegeneracy everywhere. A generic one-degree-of-freedom autonomous system has no additional functionally independent commuting invariant; the runtime may correctly report no discovery. Training retains higher-order autodiff graphs only for a step; telemetry and buffers are detached, gradients are consumed, and temporary graph references are released.
+
+## 3. Explicit functional dictionaries and constrained STLSQ
+
+The dictionary contains degree-bounded monomials and optional trig functions, dynamic coordinate names, pre-regression scaling/units filtering and an enforced feature budget. For a fixed degree k, construction is polynomial in coordinate count. Allowing arbitrary k still gives combinatorial growth `M = binomial(n+k,k)`; the budget is checked **before** enumeration. There is no expression-tree search.
+
+Runge–Lenz contains `q_i/r`, which is absent from a cubic/trig library. `include_kepler=True` adds those radial functions explicitly and rejects collisions at r=0. Without them, exact Kepler recovery would be an invalid claim. Units filtering assumes dimensionless coefficients; dimensional constants such as μ require explicit dimensional metadata/custom terms. Automatic radial scaling/units filtering is rejected rather than silently dropping required physical terms.
+
+STLSQ normalizes columns, uses stable least squares (no explicitly inverted normal equations), monotonically prunes support, refits active terms and debiases the selected support. Optional homogeneous constraints `C ξ=0` are imposed through a numerical nullspace basis. `conservation_constraints` constructs C from library Lie derivatives along the current vector field, allowing terms to cancel collectively. Pruning individual terms just because they fail to commute would incorrectly eliminate combinations such as angular momentum. `fit_gradient` fits gradients of scalar library functions, retaining integrability and leaving the additive constant undetermined.
+
+A conservative dense cost is `O(K (N M² + M³))`, plus constraint-SVD work, not O(M³) independent of sample count. STLSQ is not a global L0/Pareto optimizer and exact sparse recovery needs identifiability, suitable terms and adequate conditioning. Runtime/accuracy bounds are measured on a particular CPU and dataset, not guaranteed on every machine.
+
+Distillation uses separate reference subsets for fit and validation, a variance gate, neural Poisson residual, held-out scalar R² and the compiled expression's own Poisson residual. Only then is an adapter consolidated. These are empirical checks on the learned latent model; they are not proofs about unknown physical laws. Calibration references should span multiple trajectories/energies; a single orbit alone is insufficient to establish independent invariants.
+
+## 4. Low-rank adapters, exact snapshots and finite capacity
+
+Adapters modify the scalar Hamiltonian, so its vector field remains Hamiltonian. Ordinary rectangular weight matrices are not symplectic matrices; the name does not assert otherwise. Base weights and inference statistics are frozen; active A/B factors are trainable. Each consolidated adapter stores its effective low-rank factors. Named task inference replays the frozen prefix of adapters in **every** layer.
+
+Two explicit policies are available:
+
+- **`activation` (default):** new adapter inputs are projected through the complement of an SVD-orthonormalized union of protected activation spans. Overlapping bases are merged; the incorrect formula `I − Σ U_k U_kᵀ` is never used for overlapping subspaces. Captured spans are finite-sample constraints. When a layer is saturated, `ActivationCapacityError` stops learning instead of silently returning a zero plastic gradient. Effects outside the sampled span and nonlinear network interactions still require task validation.
+- **`task`:** new adapters have their full input capacity; named frozen task snapshots give deterministic retention when the correct task is routed. This is the policy used for sequential oscillator → quartic → Hénon–Heiles learning. It relies on an explicit task context and a fixed encoder/decoder. It is not context-free preservation by activation orthogonality.
+
+An n-dimensional activation space cannot contain arbitrarily many independent protected directions while always retaining a nonempty complement. Distinct vector fields assigning different derivatives to the same state also cannot be represented by one unconditional autonomous Hamiltonian. Thus the requested unlimited plasticity and zero-degradation theorem does not follow from LoRA. V2 exposes the policy choice, hard capacity limits (including a 128-task snapshot budget), context and failure explicitly.
+
+The coordinate chart is frozen after calibration; recalibration after consolidating tasks is rejected. Checkpoints save the chart, base/adapters, reference set, miner and optimizer states. On restore, transient EKF and sensor state are reset; runtime tasks/connections are not serialized. State restoration uses tensor-only safe loading (`weights_only=True`), and files are replaced atomically. Only use checkpoints from a source whose tensor sizes/resource requirements you trust.
+
+## Acceptance criteria: exact scope
+
+| Requested criterion | Evidence / boundary |
+|---|---|
+| Noisy 128D pixel pendulum uniquely recovers physical canonical state | Impossible from an ambiguous single image without more information; a counterexample is tested. A separate **identifiable full-state 128D telemetry** experiment with 15% noise exceeds R² .98 after training; an affine-aligned latent score is diagnostic, not a symplectic gauge proof. |
+| Latent symplectic defect <1e−5 | The actual latent midpoint flow has defect below 1e−10 in the test. No rectangular encoder is mislabeled a symplectomorphism. |
+| Runge–Lenz <200 ms, R² >.999, <6 terms | Tested on CPU with one BLAS thread, using cubic/trig **plus required radial terms**; five-term recovery is checked on separate points. The input is analytical Runge–Lenz evaluations, not an autonomously discovered neural candidate. |
+| No Lz forgetting after learning quartic and Hénon–Heiles | New regimes measurably learn; old named oscillator predictions remain identical; 500-step routed oscillator rollouts keep Lz drift below 1e−4. This validates task-routed snapshots, not the claimed unrestricted activation-space theorem. |
+
+The code is a tested research/development engine with explicit contracts. GPU memory stability over an unbounded stream, a real camera/laboratory deployment, arbitrary semantic control, and production availability/SLA remain unverified. It does not assert production certification from unit tests.
+
+================================================================================
 FILE: docs/VALIDATED_VERSIONS.txt
 SHA256: 649d4ca577038f6433631cb2483a40ebf0717b1c72be836e07e48987f7bab50e
 ================================================================================
@@ -2402,7 +4639,7 @@ A aplicação de referência e as integrações opcionais têm estados de valida
 
 ================================================================================
 FILE: pyproject.toml
-SHA256: 3a5b3c2c0902c3e5eca07cb649fa3a76c3ef16167eae4799a6f9fe6c96f4dc67
+SHA256: 28218d2392421f48238f0ecb624d79cee7d28c089ec2a1d47b933d204b0150d5
 ================================================================================
 [build-system]
 requires = ["setuptools>=75", "wheel"]
@@ -2410,7 +4647,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cnge-engine"
-version = "0.1.0"
+version = "0.2.0"
 description = "Continuous Neuro-Geometric Epistemic Engine"
 requires-python = ">=3.11"
 dependencies = ["torch>=2.5,<3", "numpy>=2,<3", "websockets>=14,<17"]
@@ -2422,12 +4659,13 @@ camera = ["opencv-python-headless>=4.10,<5"]
 
 [project.scripts]
 cnge-demo = "cnge_engine.demo:main"
+cnge-v2-demo = "cnge_v2.demo:main"
 
 [tool.setuptools.packages.find]
-include = ["cnge_engine*"]
+include = ["cnge_engine*", "cnge_v2*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "cnge_v2/verification"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = ["long: 50000-step scientific validation"]
