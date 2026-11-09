@@ -1,0 +1,1 @@
+"""CNGE visualization components."""

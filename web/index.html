@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CNGE · Espaço de fases</title>
+<style>
+:root{font:16px system-ui;color:#dfeafa;background:#0c1320;color-scheme:dark}body{max-width:1200px;margin:auto;padding:28px}h1{font-weight:550;letter-spacing:.04em}header{display:flex;align-items:center;justify-content:space-between}small{color:#9db0c9}main{display:grid;grid-template-columns:2fr 1fr;gap:24px}canvas{background:#101e31;border:1px solid #29415f;border-radius:12px;width:100%;height:480px}aside{padding:20px;background:#101e31;border-radius:12px}button,input{font:inherit;padding:10px;border:1px solid #3d5c7f;border-radius:6px;margin:5px 0;width:100%;box-sizing:border-box}button{background:#164e65;cursor:pointer}pre{font-size:12px;white-space:pre-wrap}#status{color:#fbbf24}label{font-size:14px}p{line-height:1.5}@media(max-width:760px){main{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header><h1>CNGE <small> / espaço de fases</small></h1><span id="status" role="status">Conectando…</span></header>
+<p>Telemetria do oscilador · projeção visual (q₁, q₂, p₁). Candidatos empíricos exigem validação física.</p>
+<main><section><canvas id="phase" aria-label="Trajetória no espaço de fases"></canvas><p><small>Clique no plano para aplicar uma perturbação em q. A intervenção altera o estado observado, não o sensor de origem.</small></p></section>
+<aside><h2>Intervenções</h2><label for="constraint">Restrição suportada</label><input id="constraint" value="Assume rotational symmetry in the xy-plane"><button id="apply">Aplicar simetria xy</button><button id="clear">Limpar trajetória</button><h2>Métricas</h2><pre id="metrics">Aguardando telemetria…</pre><h2>Descobertas</h2><pre id="discoveries">Nenhum candidato validado.</pre><p id="error" role="alert"></p></aside></main>
+<script>
+'use strict';
+const canvas=document.querySelector('#phase'), ctx=canvas.getContext('2d');
+const status=document.querySelector('#status'), points=[];
+let socket, retry, stopped=false;
+function connect(){
+  const port=Number(location.port)-1;
+  socket=new WebSocket(`ws://${location.hostname}:${port}`);
+  socket.onopen=()=>{status.textContent='Ao vivo';status.style.color='#6ee7b7';};
+  socket.onclose=()=>{status.textContent='Desconectado';status.style.color='#fbbf24';if(!stopped)retry=setTimeout(connect,1500);};
+  socket.onerror=()=>{document.querySelector('#error').textContent='Falha na conexão de telemetria.';};
+  socket.onmessage=event=>{
+    try{
+      const data=JSON.parse(event.data);
+      if(data.error){document.querySelector('#error').textContent=data.error;return;}
+      for(const batch of data.vertices||[])for(const point of batch){if(point.length===3&&point.every(Number.isFinite))points.push(point);}
+      if(points.length>2000)points.splice(0,points.length-2000);
+      document.querySelector('#metrics').textContent=JSON.stringify(data.metrics||{},null,2);
+      document.querySelector('#discoveries').textContent=data.discoveries?.length?JSON.stringify(data.discoveries,null,2):'Nenhum candidato validado.';
+    }catch{document.querySelector('#error').textContent='Mensagem de telemetria inválida.';}
+  };
+}
+function send(packet){if(socket.readyState===WebSocket.OPEN){socket.send(JSON.stringify(packet));document.querySelector('#error').textContent='';}else document.querySelector('#error').textContent='Aguarde a conexão.';}
+document.querySelector('#apply').onclick=()=>send({type:'constraint',prompt:document.querySelector('#constraint').value});
+document.querySelector('#clear').onclick=()=>{points.length=0;};
+canvas.onclick=e=>{const r=canvas.getBoundingClientRect();send({type:'perturbation',delta:[(e.clientX-r.left-r.width/2)/100,-(e.clientY-r.top-r.height/2)/100,0,0]});};
+function render(){
+ const ratio=devicePixelRatio||1,w=canvas.clientWidth,h=canvas.clientHeight;
+ if(canvas.width!==w*ratio||canvas.height!==h*ratio){canvas.width=w*ratio;canvas.height=h*ratio;}
+ ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,w,h);
+ ctx.strokeStyle='#29415f';ctx.lineWidth=1;
+ for(let i=-5;i<=5;i++){ctx.beginPath();ctx.moveTo(w/2+i*50,0);ctx.lineTo(w/2+i*50,h);ctx.stroke();ctx.beginPath();ctx.moveTo(0,h/2+i*50);ctx.lineTo(w,h/2+i*50);ctx.stroke();}
+ ctx.strokeStyle='#67e8f9';ctx.lineWidth=2;ctx.beginPath();
+ points.forEach((p,i)=>{const x=w/2+100*(p[0]+.35*p[2]),y=h/2-100*(p[1]+.15*p[2]);if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});ctx.stroke();
+ ctx.fillStyle='#9db0c9';ctx.fillText('q₁ →    q₂ ↑    p₁ ↗',14,24);requestAnimationFrame(render);
+}
+window.addEventListener('beforeunload',()=>{stopped=true;clearTimeout(retry);socket?.close();});connect();render();
+</script>
+</body></html>

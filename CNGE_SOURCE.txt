@@ -1,0 +1,3157 @@
+CNGE — complete source archive (UTF-8)
+Each FILE section contains the original text of one tracked project file.
+
+================================================================================
+FILE: .github/workflows/ci.yml
+SHA256: 21c3b356234f7741aca9c551eec3c9b9f3e5cee6a2576dadb987872b9764a863
+================================================================================
+name: Validate CNGE
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: python -m pip install -e '.[dev]'
+      - run: ruff check cnge_engine tests tools
+      - run: ruff format --check cnge_engine tests tools
+      - run: pytest -q
+      - run: cnge-demo --steps 1000
+      - run: python -m build
+      - run: python tools/export_source.py --output /tmp/CNGE_SOURCE.txt && cmp CNGE_SOURCE.txt /tmp/CNGE_SOURCE.txt
+
+================================================================================
+FILE: .gitignore
+SHA256: 0a37687c263329f91cbd23a2df48446ce4f37dba765d1d3b854aaa2da6fc4ba2
+================================================================================
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+artifacts/
+.ruff_cache/
+
+================================================================================
+FILE: MANIFEST.in
+SHA256: c571a6a537d0db2a4967c5f891ce01d42efa800b91c8b883d79dd23d550dc226
+================================================================================
+include README.md pyproject.toml CNGE_SOURCE.txt
+recursive-include docs *.md *.txt
+recursive-include tests *.py
+recursive-include tools *.py *.cjs
+recursive-include web *.html
+recursive-include .github *.yml
+
+================================================================================
+FILE: README.md
+SHA256: 903d256ca706ba2a18770e22d08468c88b8c9fbc38a210c2722efdfbd7977e44
+================================================================================
+# CNGE — Continuous Neuro-Geometric Epistemic Engine
+
+Implementação de referência executável da arquitetura neurogeométrica do anexo, em Python/PyTorch. Inclui os 22 módulos especificados, testes, demonstração científica, runtime de aprendizado online, transporte WebSocket e uma interface de inspeção em canvas.
+
+**Estado:** pesquisa/desenvolvimento. As metas de descoberta autônoma geral, retenção perfeita, prova física, desempenho GPU e operação de produção ainda não estão demonstradas. Consulte [limites e correspondência com o pedido](docs/VALIDATION.md).
+
+## Instalação
+
+Python 3.11+ (validado localmente com Python 3.12). CPU não requer GPU, câmera, serviços externos ou credenciais:
+
+```bash
+cd /workspace/CNGE
+python -m venv .venv
+.venv/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+.venv/bin/python -m pip install -e '.[dev]'
+.venv/bin/python -m pip check
+```
+
+Em uma máquina CUDA, instale primeiro a distribuição de PyTorch adequada ao driver usando as instruções oficiais do PyTorch, e selecione `EngineConfig(device="cuda")`. Não presuma disponibilidade de GPU. Cada tarefa cloud já é isolada: use o checkout existente, sem criar worktrees.
+
+## Executar e verificar
+
+```bash
+.venv/bin/cnge-demo --steps 1000 --output artifacts/demo.json
+.venv/bin/pytest -q
+.venv/bin/pytest --long -m long -q  # três testes de 50.000 passos; cerca de 14 minutos nesta CPU
+.venv/bin/ruff check cnge_engine tests tools
+.venv/bin/ruff format --check cnge_engine tests tools
+.venv/bin/python -m build
+```
+
+A demonstração integra o oscilador harmônico isotrópico 3D, verifica um invariante analítico conhecido, sintetiza `L_z = q_x p_y - q_y p_x`, verifica a expressão em pontos separados e a registra na gramática. O relatório distingue esse exercício de uma descoberta neural autônoma.
+
+## Interface e aprendizado online
+
+```bash
+.venv/bin/python tools/live_demo.py
+# Execução finita, útil para smoke test:
+.venv/bin/python tools/live_demo.py --steps 100
+```
+
+O processo inicia HTTP na porta 8081 e WebSocket na 8080, ambos em loopback. Para acesso local, abra o arquivo servido pelo HTTP no navegador da mesma máquina. A interface mostra `(q₁,q₂,p₁)`, métricas, candidatos e permite perturbações e restrição rotacional xy. Essa é uma projeção visual, não uma transformação simplética em 3D. Os processos não sobrevivem a snapshots: reinicie o comando quando necessário. `Ctrl+C` fecha o runtime e os servidores. Não exponha esse servidor sem autenticação e uma configuração de implantação própria.
+
+Para outros sensores, forneça um iterador assíncrono de coordenadas `[d]` ao método `start_epistemic_runtime(source)` e aguarde a tarefa retornada. `stop()` cancela e coleta tarefas. A fonte deve ter período uniforme `integrator_dt` e massa constante conhecida para que a aproximação `p = m dq/dt` seja apropriada. Uma mudança de coordenadas observada não necessariamente corresponde a um impulso físico.
+
+```python
+import asyncio
+from cnge_engine import EngineConfig
+from cnge_engine.streaming.asynchronous_orchestrator import EpistemicContinuousOrchestrator
+
+async def observations():
+    for q in ([1., 0.], [.99995, .01], [.9998, .02]):
+        yield q
+
+async def main():
+    engine = EpistemicContinuousOrchestrator(EngineConfig(spatial_dim=2))
+    try:
+        await engine.start_epistemic_runtime(observations())
+        print(engine.metrics)
+    finally:
+        await engine.stop()
+
+asyncio.run(main())
+```
+
+O runtime realiza atualização Hamiltoniana por SGD com gradiente projetado, mineração Noether por Adam, replay periódico, verificação empírica e compilação condicional. A mineração e as operações tensoriais são serializadas numa tarefa cooperativa para evitar corridas nos parâmetros; não se afirma execução concorrente em streams CUDA. A busca simbólica pode bloquear brevemente o loop. Eventos externos têm fila limitada e quadros são descartados em favor do mais recente para clientes lentos.
+
+### Integrações opcionais
+
+- **Embeddings:** `pip install -e '.[semantic]'`. `FoundationEmbeddingBridge` carrega um modelo Sentence Transformers explicitamente; o download requer acesso ao Hugging Face e seus hosts de armazenamento. Não ocorre na importação do pacote. O adaptador foi testado com backend injetado; o modelo remoto não foi baixado. A projeção contrastiva precisa de pares científicos rotulados antes de uso semântico significativo.
+- **Câmera:** `pip install -e '.[camera]'`. `ContinuousSensorStream.capture(coordinate_extractor)` requer um dispositivo e uma função que transforme frames em coordenadas físicas calibradas. O código não interpreta pixels como posições ou inventa calibração.
+- **Semântica:** a tradução de restrições suporta explicitamente rotação no plano xy. Prompts arbitrários são rejeitados; a explicação apresenta a expressão e o estado empírico, sem inventar citações ou provas.
+
+## Estrutura
+
+`cnge_engine/` segue a organização do pedido: `config`, `math_core`, `dynamics`, `noether`, `crystallization`, `semantic_bridge`, `streaming` e `visualization`. Os testes ficam em `tests/`; o frontend em `web/`. O pedido original está preservado em [docs/SPECIFICATION.txt](docs/SPECIFICATION.txt).
+
+## Código-fonte em um único TXT
+
+[CNGE_SOURCE.txt](CNGE_SOURCE.txt) reúne todos os arquivos de texto versionados (código, testes, interface, configuração e documentação), com caminho e SHA-256 de cada arquivo. É um arquivo de fontes concatenadas, não um executável binário. Recrie-o após alterar os fontes:
+
+```bash
+git add .
+.venv/bin/python tools/export_source.py
+```
+
+O exportador exclui a si próprio como **saída** (`CNGE_SOURCE.txt`), mas inclui seu script, e não inclui `.venv`, caches, artefatos ou credenciais. A distribuição Python compilada/empacotada fica em `dist/` após `python -m build`.
+
+### Teste do navegador
+
+Com o servidor de demonstração ativo, execute `node tools/browser_smoke.cjs` em um ambiente com Playwright e Chromium. Se necessário, instale o cliente com `npm install --prefix /tmp/cnge-browser playwright` e use `NODE_PATH=/tmp/cnge-browser/node_modules node tools/browser_smoke.cjs`. `CHROMIUM_PATH` seleciona o executável Chromium instalado. O teste verifica telemetria real, intervenções, erros JavaScript e layout móvel.
+
+================================================================================
+FILE: cnge_engine/__init__.py
+SHA256: 6b3aaa87dcebf85cf87ccc06548c72484e179a630b4bd8a8bad94192fbb4f9da
+================================================================================
+"""Differentiable canonical mechanics and bounded scientific discovery tools."""
+
+from .config.system_params import EngineConfig
+from .math_core.symplectic import SymplecticManifold
+
+__all__ = ["EngineConfig", "SymplecticManifold"]
+__version__ = "0.1.0"
+
+================================================================================
+FILE: cnge_engine/config/__init__.py
+SHA256: 8a3f92f24777ad1d2d252695edc1a983d58ec6042409d40b7eb96e307bea8a0a
+================================================================================
+"""CNGE config components."""
+
+================================================================================
+FILE: cnge_engine/config/system_params.py
+SHA256: c4e0297837ca447fb7f8d528e0df569e0b2b93efd77636c0a046dd0ea4d3bbe3
+================================================================================
+import math
+from dataclasses import dataclass
+
+import torch
+
+
+@dataclass(frozen=True)
+class EngineConfig:
+    spatial_dim: int = 2
+    device: str = "cpu"
+    dtype: torch.dtype = torch.float32
+    integrator_type: str = "implicit_midpoint"
+    integrator_dt: float = 0.01
+    integrator_tol: float = 1e-12
+    max_fixed_point_iters: int = 20
+    poisson_threshold: float = 1e-4
+    pareto_mdl_weight: float = 0.05
+    memory_replay_interval_secs: float = 3600
+    embedding_dim: int = 1024
+    learning_rate: float = 1e-3
+    buffer_size: int = 256
+    discovery_interval: int = 100
+    min_invariant_variance: float = 1e-3
+
+    def __post_init__(self):
+        for name in (
+            "spatial_dim",
+            "embedding_dim",
+            "max_fixed_point_iters",
+            "buffer_size",
+            "discovery_interval",
+        ):
+            if not isinstance(getattr(self, name), int) or getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be a positive integer")
+        for name in (
+            "integrator_dt",
+            "integrator_tol",
+            "poisson_threshold",
+            "learning_rate",
+            "memory_replay_interval_secs",
+            "min_invariant_variance",
+        ):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+        if self.pareto_mdl_weight < 0 or not math.isfinite(self.pareto_mdl_weight):
+            raise ValueError("pareto_mdl_weight must be finite and nonnegative")
+        if self.dtype not in (torch.float32, torch.float64):
+            raise ValueError("use float32 or float64")
+        if self.integrator_type not in ("implicit_midpoint", "yoshida4"):
+            raise ValueError("unknown integrator")
+        if torch.device(self.device).type == "cuda" and not torch.cuda.is_available():
+            raise ValueError("CUDA requested but unavailable")
+
+================================================================================
+FILE: cnge_engine/crystallization/__init__.py
+SHA256: 628791f4cf4f1c45a7318577a511127cf9516f864e5bd144d8009a9361b046ac
+================================================================================
+"""CNGE crystallization components."""
+
+================================================================================
+FILE: cnge_engine/crystallization/ast_grammar.py
+SHA256: 969381765e433529ca3288adf894beb4ae466634ac2875b9f24ff2f4c66de292
+================================================================================
+from dataclasses import dataclass, field
+
+import numpy as np
+
+
+@dataclass(frozen=True)
+class ASTNode:
+    op: str
+    children: tuple = ()
+    value: float | int | None = None
+
+    def __post_init__(self):
+        object.__setattr__(self, "children", tuple(self.children))
+        arity = {
+            "const": 0,
+            "var": 0,
+            "+": 2,
+            "-": 2,
+            "*": 2,
+            "/": 2,
+            "sin": 1,
+            "cos": 1,
+            "exp": 1,
+            "ln": 1,
+            "square": 1,
+            "sqrt": 1,
+        }
+        if self.op not in arity or len(self.children) != arity[self.op]:
+            raise ValueError("unknown operator or invalid arity")
+        if self.op == "const" and (self.value is None or not np.isfinite(self.value)):
+            raise ValueError("constant must be finite")
+        if self.op == "var" and (not isinstance(self.value, int) or self.value < 0):
+            raise ValueError("variable requires a nonnegative integer index")
+
+    def evaluate(self, z):
+        z = np.asarray(z)
+        if self.op == "const":
+            return np.full(z.shape[:-1], self.value, dtype=float)
+        if self.op == "var":
+            return z[..., self.value]
+        args = [c.evaluate(z) for c in self.children]
+        operations = {
+            "+": np.add,
+            "-": np.subtract,
+            "*": np.multiply,
+            "/": np.divide,
+            "sin": np.sin,
+            "cos": np.cos,
+            "exp": np.exp,
+            "ln": np.log,
+            "square": np.square,
+            "sqrt": np.sqrt,
+        }
+        # Invalid domains remain invalid: no protected division/log that changes the equation.
+        with np.errstate(all="ignore"):
+            return operations[self.op](*args)
+
+    def to_latex(self):
+        if self.op == "const":
+            return f"{self.value:g}"
+        if self.op == "var":
+            return f"z_{{{self.value}}}"
+        c = [child.to_latex() for child in self.children]
+        if self.op in ("+", "-", "*"):
+            symbol = r"\cdot" if self.op == "*" else self.op
+            return f"({c[0]} {symbol} {c[1]})"
+        if self.op == "/":
+            return rf"\frac{{{c[0]}}}{{{c[1]}}}"
+        if self.op == "square":
+            return f"({c[0]})^2"
+        if self.op == "sqrt":
+            return rf"\sqrt{{{c[0]}}}"
+        return rf"\{self.op}({c[0]})"
+
+    def complexity(self):
+        return 1 + sum(c.complexity() for c in self.children)
+
+    def depth(self):
+        return 1 + max((c.depth() for c in self.children), default=0)
+
+
+@dataclass
+class ASTGrammar:
+    variable_count: int
+    constants: tuple = (0.0, 1.0, -1.0, 0.5)
+    binary_ops: tuple = ("+", "-", "*", "/")
+    unary_ops: tuple = ("sin", "cos", "exp", "ln", "square", "sqrt")
+    registered: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        if self.variable_count < 1:
+            raise ValueError("variable_count must be positive")
+
+    def terminals(self):
+        return (
+            [ASTNode("var", value=i) for i in range(self.variable_count)]
+            + [ASTNode("const", value=c) for c in self.constants]
+            + list(self.registered.values())
+        )
+
+================================================================================
+FILE: cnge_engine/crystallization/dynamic_operator_registry.py
+SHA256: 6205899b3ddede97ebf24c2f4c3840239721f9a94c0792a030d4e40670578223
+================================================================================
+from .ast_grammar import ASTNode
+
+
+class DynamicOperatorRegistry:
+    def __init__(self, base_grammar):
+        self.grammar = base_grammar
+
+    def register_crystallized_invariant(self, symbolic_node: ASTNode, latex_name: str):
+        if not latex_name.strip():
+            raise ValueError("operator name must be nonempty")
+
+        def validate(node):
+            if node.op == "var" and node.value >= self.grammar.variable_count:
+                raise ValueError("operator references an out-of-domain variable")
+            for child in node.children:
+                validate(child)
+
+        validate(symbolic_node)
+        if (
+            latex_name in self.grammar.registered
+            and self.grammar.registered[latex_name] != symbolic_node
+        ):
+            raise ValueError("operator name already registered")
+        # Preserve the expanded node's complexity; no cost-free macro compression.
+        self.grammar.registered[latex_name] = symbolic_node
+
+    def get_active_grammar(self):
+        return self.grammar
+
+================================================================================
+FILE: cnge_engine/crystallization/pareto_compiler.py
+SHA256: 28f912eed15bbd4e74875abefe531b0672761b4f374b564e1e148a1c57819f21
+================================================================================
+import itertools
+from dataclasses import dataclass
+
+import numpy as np
+
+from .ast_grammar import ASTNode
+
+
+@dataclass(frozen=True)
+class Candidate:
+    node: ASTNode
+    mse: float
+    r2: float
+
+
+class ParetoSymbolicCompiler:
+    """Bounded search plus quadratic least squares. No global-optimum guarantee."""
+
+    def __init__(self, grammar, max_depth=6, beam_width=64, mdl_weight=0.05):
+        if max_depth < 1 or beam_width < 1 or mdl_weight < 0:
+            raise ValueError("invalid search budget")
+        self.grammar, self.max_depth, self.beam_width = grammar, max_depth, beam_width
+        self.mdl_weight = mdl_weight
+        self.frontier = []
+
+    def compile(self, target_eval_fn, z_domain, r2_target=0.9999):
+        z = np.asarray(z_domain, dtype=float)
+        if (
+            z.ndim != 2
+            or z.shape[1] != self.grammar.variable_count
+            or len(z) < 2
+            or not np.isfinite(z).all()
+        ):
+            raise ValueError("invalid symbolic domain")
+        y = np.asarray(target_eval_fn(z), dtype=float).reshape(-1)
+        if len(y) != len(z) or not np.isfinite(y).all() or not 0 <= r2_target <= 1:
+            raise ValueError("invalid target evaluations or R2 target")
+        variance = np.mean((y - y.mean()) ** 2)
+        seen, candidates = set(), []
+
+        def add(node):
+            if node.depth() > self.max_depth or node in seen:
+                return
+            seen.add(node)
+            values = node.evaluate(z)
+            if not np.isfinite(values).all():
+                return
+            with np.errstate(over="ignore"):
+                mse = float(np.mean((values - y) ** 2))
+            if not np.isfinite(mse):
+                return
+            r2 = 1 - mse / variance if variance > 1e-24 else float(mse < 1e-24)
+            candidates.append(Candidate(node, mse, r2))
+
+        terminals = self.grammar.terminals()
+        for node in terminals:
+            add(node)
+        # Fit sparse quadratic signatures; all retained coefficients are explicit AST constants.
+        variables = [ASTNode("var", value=i) for i in range(z.shape[1])]
+        features = [ASTNode("const", value=1.0), *variables]
+        features += [
+            ASTNode("*", (a, b)) for a, b in itertools.combinations_with_replacement(variables, 2)
+        ]
+        coefficients = np.linalg.lstsq(
+            np.stack([f.evaluate(z) for f in features], 1), y, rcond=None
+        )[0]
+        terms = []
+        for coefficient, feature in zip(coefficients, features):
+            if abs(coefficient) < 1e-9:
+                continue
+            rounded = round(float(coefficient), 10)
+            term = (
+                feature
+                if abs(rounded - 1) < 1e-9
+                else ASTNode("*", (ASTNode("const", value=rounded), feature))
+            )
+            terms.append(term)
+        if terms:
+            node = terms[0]
+            for term in terms[1:]:
+                # Emit subtraction for negative unit factors, preserving angular-momentum structure.
+                if (
+                    term.op == "*"
+                    and term.children[0].op == "const"
+                    and term.children[0].value == -1
+                ):
+                    node = ASTNode("-", (node, term.children[1]))
+                else:
+                    node = ASTNode("+", (node, term))
+            add(node)
+        for _ in range(self.max_depth - 1):
+            accurate = [c for c in candidates if c.r2 >= r2_target]
+            if accurate:
+                break
+            beam = sorted(candidates, key=lambda c: c.mse + self.mdl_weight * c.node.complexity())[
+                : self.beam_width
+            ]
+            for c in beam:
+                for op in self.grammar.unary_ops:
+                    add(ASTNode(op, (c.node,)))
+                for other in terminals:
+                    for op in self.grammar.binary_ops:
+                        add(ASTNode(op, (c.node, other)))
+                        if op in ("-", "/"):
+                            add(ASTNode(op, (other, c.node)))
+        ordered = sorted(candidates, key=lambda c: (c.node.complexity(), c.mse))
+        self.frontier = []
+        best = float("inf")
+        for c in ordered:
+            if c.mse < best:
+                self.frontier.append(c)
+                best = c.mse
+        accurate = [c for c in self.frontier if c.r2 >= r2_target]
+        if accurate:
+            return min(accurate, key=lambda c: (c.node.complexity(), c.mse)).node
+        return min(self.frontier, key=lambda c: c.mse + self.mdl_weight * c.node.complexity()).node
+
+================================================================================
+FILE: cnge_engine/crystallization/topology_analyzer.py
+SHA256: 1418450eaac0b321826fec27e1274028ad0ccc0c1583004ed5f3123a8ae29659
+================================================================================
+import torch
+
+
+class PhaseTopologyAnalyzer:
+    def __init__(self, manifold):
+        self.manifold = manifold
+
+    def compute_poincare_map(self, trajectory, surface_fn, chart_fn=None):
+        """Positive transverse crossings, linearly interpolated in ambient coordinates.
+
+        A user-supplied surface chart is required to return intrinsic 2d-1 coordinates.
+        A general surface has no canonical coordinate that can safely be dropped.
+        """
+        if trajectory.ndim != 2 or len(trajectory) < 2:
+            raise ValueError("expected [T,2d], T>=2")
+        s = surface_fn(trajectory).reshape(-1)
+        if len(s) != len(trajectory):
+            raise ValueError("surface must return one value per point")
+        indices = torch.where((s[:-1] < 0) & (s[1:] >= 0))[0]
+        fraction = -s[indices] / (s[indices + 1] - s[indices])
+        points = trajectory[indices] + fraction[:, None] * (
+            trajectory[indices + 1] - trajectory[indices]
+        )
+        return chart_fn(points) if chart_fn else points
+
+    def detect_attractor_dimensionality(self, trajectory):
+        """Finite-sample correlation dimension, with bounded O(2048^2) memory."""
+        if trajectory.ndim != 2 or len(trajectory) < 20 or not torch.isfinite(trajectory).all():
+            raise ValueError("need at least 20 finite trajectory points")
+        stride = max(1, (len(trajectory) + 2047) // 2048)
+        distances = torch.pdist(trajectory[::stride]).double()
+        distances = distances[distances > 0]
+        if len(distances) < 10:
+            raise ValueError("degenerate trajectory")
+        lo, hi = torch.quantile(
+            distances, torch.tensor([0.05, 0.5], device=distances.device, dtype=distances.dtype)
+        )
+        if hi <= lo:
+            raise ValueError("no usable scale interval")
+        radii = torch.exp(torch.linspace(lo.log(), hi.log(), 16, device=lo.device))
+        counts = (distances[:, None] < radii).double().mean(0)
+        valid = (counts > 0) & (counts < 1)
+        if valid.sum() < 3:
+            raise ValueError("insufficient correlation scales")
+        x, y = radii[valid].log(), counts[valid].log()
+        return float(((x - x.mean()) * (y - y.mean())).sum() / ((x - x.mean()) ** 2).sum())
+
+    @staticmethod
+    def pullback_metric(flow_fn, z):
+        jacobians = torch.stack([torch.func.jacrev(flow_fn)(point) for point in z])
+        return jacobians.transpose(-1, -2) @ jacobians
+
+================================================================================
+FILE: cnge_engine/demo.py
+SHA256: 88f6275455419a9248826cbca06f057a3a91a7801020b446f5c8c2d9b90e3035
+================================================================================
+"""Reproducible oscillator -> conservation -> symbolic registry demo, no model downloads."""
+
+import argparse
+import json
+from pathlib import Path
+
+import numpy as np
+import torch
+
+from .crystallization.ast_grammar import ASTGrammar
+from .crystallization.dynamic_operator_registry import DynamicOperatorRegistry
+from .crystallization.pareto_compiler import ParetoSymbolicCompiler
+from .math_core.integrators import Yoshida4thIntegrator
+from .math_core.symplectic import SymplecticManifold
+from .noether.conservation_verifier import ConservationVerifier
+
+
+def run_demo(steps=1000, seed=7):
+    if steps < 2:
+        raise ValueError("steps must be >=2")
+    generator = torch.Generator().manual_seed(seed)
+    manifold = SymplecticManifold(3, dtype=torch.float64)
+    z = torch.randn(8, 6, generator=generator, dtype=torch.float64)
+    # Keep normalization away from zero for this relative-drift demonstration.
+    z[:, 0], z[:, 1], z[:, 3], z[:, 4] = 1.0, 0.0, 0.0, 1.0
+    integrator = Yoshida4thIntegrator()
+    history = [z]
+    for _ in range(steps):
+        q, p = integrator.step_separable(*z.chunk(2, -1), lambda q: q, lambda p: p, 0.01)
+        z = torch.cat((q, p), -1)
+        history.append(z)
+
+    def angular(t):
+        return t[:, :1] * t[:, 4:5] - t[:, 1:2] * t[:, 3:4]
+
+    valid, drift = ConservationVerifier(manifold, tolerance=1e-8).verify_trajectory_invariance(
+        angular, torch.stack(history, 1)
+    )
+    samples = np.random.default_rng(seed).normal(size=(256, 6))
+    target = lambda x: x[:, 0] * x[:, 4] - x[:, 1] * x[:, 3]
+    grammar = ASTGrammar(6)
+    compiler = ParetoSymbolicCompiler(grammar)
+    node = compiler.compile(target, samples)
+    registry = DynamicOperatorRegistry(grammar)
+    registry.register_crystallized_invariant(node, "L_z")
+    heldout = np.random.default_rng(seed + 1).normal(size=(256, 6))
+    mse = np.mean((node.evaluate(heldout) - target(heldout)) ** 2)
+    r2 = 1 - mse / np.var(target(heldout))
+    return {
+        "system": "3D isotropic harmonic oscillator",
+        "steps": steps,
+        "conserved": valid,
+        "max_relative_drift": drift,
+        "latex": node.to_latex(),
+        "heldout_r2": float(r2),
+        "operator_count": len(grammar.registered),
+        "scope": "Analytical reference invariant; this demo does not claim autonomous neural discovery.",
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--steps", type=int, default=1000)
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args()
+    report = run_demo(args.steps)
+    text = json.dumps(report, indent=2)
+    print(text)
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(text + "\n")
+    if not report["conserved"] or report["heldout_r2"] < 0.9999:
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()
+
+================================================================================
+FILE: cnge_engine/dynamics/__init__.py
+SHA256: fd7a2851f0e380581e70e068ac443fba108e221ae0f99cbfe6d77c0358f0d50a
+================================================================================
+"""CNGE dynamics components."""
+
+================================================================================
+FILE: cnge_engine/dynamics/hamiltonian_nn.py
+SHA256: faf35ee271e00c106284aada27fb1313aa0128742d139e046afecc68f9d95598
+================================================================================
+import torch
+from torch import nn
+
+from ..math_core.symplectic import scalar_gradient
+
+
+class SmoothSoftplus(nn.Module):
+    """Stable softplus without the piecewise linear threshold of nn.Softplus."""
+
+    def __init__(self, beta=5.0):
+        super().__init__()
+        if beta <= 0:
+            raise ValueError("beta must be positive")
+        self.beta = beta
+
+    def forward(self, x):
+        return torch.logaddexp(torch.zeros_like(x), self.beta * x) / self.beta
+
+
+def smooth_mlp(input_dim, hidden_dims, beta=5.0):
+    layers = []
+    previous = input_dim
+    for width in hidden_dims:
+        layers.extend((nn.Linear(previous, width), SmoothSoftplus(beta)))
+        previous = width
+    return nn.Sequential(*layers, nn.Linear(previous, 1))
+
+
+class HamiltonianNN(nn.Module):
+    def __init__(self, manifold, hidden_dims=(128, 128, 128), beta=5.0):
+        super().__init__()
+        self.manifold = manifold
+        self.network = smooth_mlp(2 * manifold.spatial_dim, hidden_dims, beta).to(manifold.J)
+
+    def forward(self, z):
+        return self.network(z)
+
+    def predict_vector_field(self, z):
+        with torch.enable_grad():
+            if not z.requires_grad:
+                z = z.detach().requires_grad_(True)
+            return self.manifold.hamiltonian_vector_field(scalar_gradient(self(z), z))
+
+    def trajectory_loss(self, z_observed, dt):
+        if dt <= 0 or z_observed.ndim != 3 or z_observed.shape[1] != 2:
+            raise ValueError("expected [B,2,2d] and positive dt")
+        midpoint = z_observed.mean(1)
+        observed = (z_observed[:, 1] - z_observed[:, 0]) / dt
+        return ((self.predict_vector_field(midpoint) - observed) ** 2).sum(-1).mean()
+
+================================================================================
+FILE: cnge_engine/dynamics/lagrangian_nn.py
+SHA256: 71c1e5dca77716d270dfddda49c1932f02957c8d41e84b71080212d9f6f2b41f
+================================================================================
+import torch
+from torch import nn
+
+from .hamiltonian_nn import smooth_mlp
+
+
+class LagrangianNN(nn.Module):
+    def __init__(self, spatial_dim, hidden_dims=(128, 128)):
+        super().__init__()
+        self.spatial_dim = spatial_dim
+        self.network = smooth_mlp(2 * spatial_dim, hidden_dims)
+
+    def forward(self, q, q_dot):
+        return self.network(torch.cat((q, q_dot), -1))
+
+    def compute_acceleration(self, q, q_dot):
+        def scalar(qi, vi):
+            return self(qi[None], vi[None]).sum()
+
+        rows = []
+        for qi, vi in zip(q, q_dot):
+            dLq = torch.func.grad(scalar, argnums=0)(qi, vi)
+            momentum = torch.func.grad(scalar, argnums=1)
+            mass = torch.func.jacrev(momentum, argnums=1)(qi, vi)
+            mixed = torch.func.jacrev(momentum, argnums=0)(qi, vi)
+            # Singular/ill-conditioned learned mass matrices must not be silently inverted.
+            if not torch.isfinite(mass).all() or torch.linalg.cond(mass).detach() > 1e10:
+                raise RuntimeError("singular or ill-conditioned Lagrangian mass matrix")
+            rows.append(torch.linalg.solve(mass, dLq - mixed @ vi))
+        return torch.stack(rows)
+
+================================================================================
+FILE: cnge_engine/dynamics/stability_memory.py
+SHA256: 5b90481378bf3444398c7371d0793982ddd03da66b5108def0974ef40cbf669a
+================================================================================
+import torch
+
+
+class SymplecticSubspaceProtector:
+    """Low-rank Euclidean parameter projection; preservation is local, not a theorem of retention."""
+
+    def __init__(self, parameter_dim, damping=1e-4):
+        if parameter_dim < 1 or damping < 0:
+            raise ValueError("invalid projection dimensions or damping")
+        self.parameter_dim, self.damping = parameter_dim, damping
+        self.rows = []
+
+    def register_invariant(self, Q_invariant_fn, H_model, validation_samples):
+        z = validation_samples.detach().requires_grad_(True)
+        residual = H_model.manifold.poisson_bracket(Q_invariant_fn(z), H_model(z), z).mean()
+        params = [p for p in H_model.parameters() if p.requires_grad]
+        if sum(p.numel() for p in params) != self.parameter_dim:
+            raise ValueError("parameter dimension mismatch")
+        grads = torch.autograd.grad(residual, params, allow_unused=True)
+        self.rows.append(
+            torch.cat(
+                [
+                    (torch.zeros_like(p) if g is None else g).reshape(-1)
+                    for p, g in zip(params, grads)
+                ]
+            ).detach()
+        )
+
+    def project_gradient(self, raw_gradient):
+        if raw_gradient.shape != (self.parameter_dim,):
+            raise ValueError("expected a flat parameter gradient")
+        if not self.rows:
+            return raw_gradient.clone()
+        A = torch.stack(self.rows).to(raw_gradient)
+        if self.damping == 0:
+            return raw_gradient - torch.linalg.pinv(A) @ (A @ raw_gradient)
+        gram = A @ A.T + self.damping * torch.eye(len(A), device=A.device, dtype=A.dtype)
+        return raw_gradient - A.T @ torch.linalg.solve(gram, A @ raw_gradient)
+
+================================================================================
+FILE: cnge_engine/math_core/__init__.py
+SHA256: 499c4d02b16a9b174f8e7b9dad707d0531b752509baea1b3415704096b308edc
+================================================================================
+"""CNGE math_core components."""
+
+================================================================================
+FILE: cnge_engine/math_core/integrators.py
+SHA256: 7ea0a25e4fb67005bcc62afd699570f2abf9a3ade162f46dd8f66b3b063d84ac
+================================================================================
+import math
+from abc import ABC, abstractmethod
+
+import torch
+
+
+class SymplecticIntegrator(ABC):
+    @abstractmethod
+    def step(self, z_t, vector_field_fn, dt):
+        raise NotImplementedError
+
+
+def _validate_dt(dt):
+    if not math.isfinite(dt):
+        raise ValueError("dt must be finite")
+
+
+class ImplicitMidpointIntegrator(SymplecticIntegrator):
+    """Differentiable fixed-point solve; raises instead of accepting nonconvergence."""
+
+    def __init__(self, max_iters=20, tol=1e-12):
+        if max_iters < 1 or tol <= 0:
+            raise ValueError("invalid solver controls")
+        self.max_iters, self.tol = max_iters, tol
+
+    def step(self, z_t, vector_field_fn, dt):
+        _validate_dt(dt)
+        estimate = z_t
+        for _ in range(self.max_iters):
+            updated = z_t + dt * vector_field_fn((z_t + estimate) / 2)
+            residual = (updated - estimate).detach().abs().max()
+            if not torch.isfinite(updated).all():
+                raise RuntimeError("nonfinite midpoint iterate")
+            # A precision floor is necessary for float32; float64 retains the requested tolerance.
+            threshold = max(
+                self.tol,
+                4 * torch.finfo(z_t.dtype).eps * max(1.0, float(updated.detach().abs().max())),
+            )
+            estimate = updated
+            if residual <= threshold:
+                return estimate
+        raise RuntimeError("implicit midpoint did not converge; reduce dt or increase max_iters")
+
+
+class Yoshida4thIntegrator(SymplecticIntegrator):
+    """Fourth order composition for explicitly separable H=T(p)+V(q)."""
+
+    def step(self, z_t, vector_field_fn, dt):
+        raise ValueError("Yoshida requires explicit grad_V_fn and grad_T_fn; use step_separable")
+
+    def step_separable(self, q_t, p_t, grad_V_fn, grad_T_fn, dt):
+        _validate_dt(dt)
+        w1 = 1 / (2 - 2 ** (1 / 3))
+        w0 = -(2 ** (1 / 3)) * w1
+        q, p = q_t, p_t
+        for weight in (w1, w0, w1):
+            p = p - dt * weight / 2 * grad_V_fn(q)
+            q = q + dt * weight * grad_T_fn(p)
+            p = p - dt * weight / 2 * grad_V_fn(q)
+        return q, p
+
+================================================================================
+FILE: cnge_engine/math_core/lie_algebra.py
+SHA256: 1412dce20cd2d6ea69fce79728ef77d3bf6973b661be4924b952e7be29b4bc76
+================================================================================
+import torch
+
+
+class LieAlgebraEngine:
+    @staticmethod
+    def lie_bracket_fields(X_fn, Y_fn, z):
+        _, dy_x = torch.autograd.functional.jvp(Y_fn, z, X_fn(z), create_graph=True)
+        _, dx_y = torch.autograd.functional.jvp(X_fn, z, Y_fn(z), create_graph=True)
+        return dy_x - dx_y
+
+    def structure_constants(self, basis_fields, z_samples):
+        if not basis_fields:
+            raise ValueError("empty basis")
+        design = torch.stack([fn(z_samples).reshape(-1) for fn in basis_fields], -1)
+        rows = []
+        for x in basis_fields:
+            rows.append(
+                torch.stack(
+                    [
+                        torch.linalg.lstsq(
+                            design, self.lie_bracket_fields(x, y, z_samples).reshape(-1, 1)
+                        ).solution[:, 0]
+                        for y in basis_fields
+                    ]
+                )
+            )
+        return torch.stack(rows)
+
+    @staticmethod
+    def killing_residual(X_fn, metric_fn, z):
+        """Pointwise Lie derivative of a metric, shape [B,n,n]."""
+
+        def point(x):
+            X = X_fn(x[None])[0]
+            g = metric_fn(x[None])[0]
+            jac = torch.func.jacrev(lambda t: X_fn(t[None])[0])(x)
+            dg = torch.func.jacrev(lambda t: metric_fn(t[None])[0])(x)
+            return torch.einsum("ijk,k->ij", dg, X) + jac.T @ g + g @ jac
+
+        return torch.stack([point(x) for x in z])
+
+================================================================================
+FILE: cnge_engine/math_core/symplectic.py
+SHA256: 3788a2f12a433878c92b7241ce6f9815f84482c4693169c64a2392006b6d54d8
+================================================================================
+import torch
+from torch import nn
+
+
+def scalar_gradient(value, z):
+    """Gradient of independent scalar evaluations, including constant functions."""
+    if not value.requires_grad:
+        return z * 0
+    grad = torch.autograd.grad(
+        value.sum(), z, create_graph=True, retain_graph=True, allow_unused=True
+    )[0]
+    return z * 0 if grad is None else grad
+
+
+class SymplecticManifold(nn.Module):
+    def __init__(self, spatial_dim, device="cpu", dtype=torch.float32):
+        super().__init__()
+        if spatial_dim < 1:
+            raise ValueError("spatial_dim must be positive")
+        self.spatial_dim = spatial_dim
+        eye = torch.eye(spatial_dim, device=device, dtype=dtype)
+        zero = torch.zeros_like(eye)
+        self.register_buffer(
+            "J", torch.cat((torch.cat((zero, eye), 1), torch.cat((-eye, zero), 1)), 0)
+        )
+
+    def canonical_matrix(self):
+        return self.J
+
+    def hamiltonian_vector_field(self, grad_H):
+        if grad_H.shape[-1] != self.J.shape[0]:
+            raise ValueError("incorrect phase dimension")
+        return grad_H @ self.J.T
+
+    def poisson_bracket(self, f, g, z):
+        if not z.requires_grad:
+            raise ValueError("z must require gradients")
+        return (scalar_gradient(f, z) * self.hamiltonian_vector_field(scalar_gradient(g, z))).sum(
+            -1, keepdim=True
+        )
+
+    def check_symplectomorphism(self, jacobian_map, tol=1e-6):
+        error = jacobian_map.transpose(-1, -2) @ self.J @ jacobian_map - self.J
+        return bool(torch.linalg.matrix_norm(error).max() < tol), error
+
+================================================================================
+FILE: cnge_engine/noether/__init__.py
+SHA256: abde14187e062b017827da44144c7d2e7bb539537dd7bf723f377b4b86cc6d10
+================================================================================
+"""CNGE noether components."""
+
+================================================================================
+FILE: cnge_engine/noether/conservation_verifier.py
+SHA256: b65ebabe373dd7660512dbc2f6ecd21b481debcbcc70a7ab692a4b4ad735cb9f
+================================================================================
+import math
+
+import torch
+
+
+class ConservationVerifier:
+    """Empirical relative trajectory drift; confidence bounds require independent bounded samples."""
+
+    def __init__(self, manifold, tolerance=1e-4, confidence=0.999):
+        if tolerance <= 0 or not 0 < confidence < 1:
+            raise ValueError("invalid verification settings")
+        self.manifold, self.tolerance, self.confidence = manifold, tolerance, confidence
+
+    def verify_trajectory_invariance(self, Q_fn, trajectories):
+        if trajectories.ndim != 3 or trajectories.shape[1] < 2 or not trajectories.numel():
+            raise ValueError("expected nonempty [B,T,2d], T>=2")
+        values = Q_fn(trajectories.reshape(-1, trajectories.shape[-1])).reshape(
+            *trajectories.shape[:2], -1
+        )
+        initial = values[:, :1]
+        drift = ((values - initial).abs() / (initial.abs() + torch.finfo(values.dtype).eps)).max()
+        metric = float(drift.detach())
+        return math.isfinite(metric) and metric < self.tolerance, metric
+
+    def bounded_failure_upper_bound(self, failures, sample_count):
+        """Hoeffding upper bound on Bernoulli failure rate for IID trajectories, not timesteps."""
+        if not 0 <= failures <= sample_count or sample_count < 1:
+            raise ValueError("invalid sample counts")
+        return min(
+            1.0,
+            failures / sample_count
+            + math.sqrt(math.log(1 / (1 - self.confidence)) / (2 * sample_count)),
+        )
+
+================================================================================
+FILE: cnge_engine/noether/symmetry_miner.py
+SHA256: db5e37c2d93fe87890376d55b0f0767d9f587e796f9e9fd9ed9f9708f638348f
+================================================================================
+import torch
+from torch import nn
+
+from ..dynamics.hamiltonian_nn import smooth_mlp
+from ..math_core.symplectic import scalar_gradient
+
+
+class LieSymmetryMiner(nn.Module):
+    def __init__(self, manifold, hidden_dims=(64, 64, 64)):
+        super().__init__()
+        self.manifold = manifold
+        self.network = smooth_mlp(2 * manifold.spatial_dim, hidden_dims).to(manifold.J)
+
+    def forward(self, z):
+        return self.network(z)
+
+    def compute_loss(self, z_batch, H_model):
+        z = z_batch.detach().requires_grad_(True)
+        Q, H = self(z), H_model(z)
+        dq, dh = scalar_gradient(Q, z), scalar_gradient(H, z)
+        comm = self.manifold.poisson_bracket(Q, H, z).square().mean()
+        nontrivial = torch.exp(-Q.var(unbiased=False))
+        denominator = dq.square().sum(-1).mean() * dh.square().sum(-1).mean()
+        orth = (dq * dh).sum(-1).mean().square() / denominator.clamp_min(torch.finfo(z.dtype).eps)
+        loss = comm + nontrivial + orth
+        return loss, {
+            "commutator": float(comm.detach()),
+            "nontrivial": float(nontrivial.detach()),
+            "orthogonality": float(orth.detach()),
+        }
+
+================================================================================
+FILE: cnge_engine/semantic_bridge/__init__.py
+SHA256: 366fa96976b872dbc03444f348ab5e1a9333d22918016606230fe83808b43f38
+================================================================================
+"""CNGE semantic_bridge components."""
+
+================================================================================
+FILE: cnge_engine/semantic_bridge/bidirectional_translator.py
+SHA256: 80ab4e3cf541bb7dc191cb24d41a8046b697d9549a014962197e4cd21f063391
+================================================================================
+from dataclasses import dataclass
+
+import torch
+
+
+@dataclass(frozen=True)
+class GeometricConstraint:
+    name: str
+    generator: torch.Tensor
+    description: str
+
+
+class BidirectionalTranslator:
+    """Explicit supported constraint vocabulary; no fabricated scientific citations."""
+
+    def __init__(self, embedder, transport, registry):
+        self.embedder, self.transport, self.registry = embedder, transport, registry
+
+    def prompt_to_geometric_constraint(self, user_prompt):
+        prompt = user_prompt.casefold()
+        if (
+            not any(word in prompt for word in ("rotational", "rotation", "rotação", "rotacional"))
+            or "xy" not in prompt
+        ):
+            raise ValueError("supported constraint: rotational symmetry in the xy-plane")
+        n = self.registry.grammar.variable_count
+        if n < 4 or n % 2:
+            raise ValueError("xy rotation requires at least two canonical coordinates")
+        generator = torch.zeros(n, n)
+        d = n // 2
+        generator[0, 1], generator[1, 0] = -1, 1
+        generator[d, d + 1], generator[d + 1, d] = -1, 1
+        return GeometricConstraint(
+            "rotation_xy",
+            generator,
+            "Simultaneous rotation of q and p in the xy-plane; enforce via the Lz Poisson residual.",
+        )
+
+    def discovery_to_natural_explanation(self, symbolic_node):
+        names = [
+            name for name, node in self.registry.grammar.registered.items() if node == symbolic_node
+        ]
+        return {
+            "latex": symbolic_node.to_latex(),
+            "registered_names": names,
+            "interpretation": "Candidate scalar invariant; interpretation requires independent physical validation.",
+            "literature_matches": [],
+            "proof": None,
+        }
+
+================================================================================
+FILE: cnge_engine/semantic_bridge/foundation_embedding.py
+SHA256: cca25980c7ef7d4dd0cad203966159edccd09340bac1db8f75789a45dc97094f
+================================================================================
+import torch
+from torch.nn import functional as F
+
+
+class FoundationEmbeddingBridge:
+    def __init__(self, model_identifier="BAAI/bge-m3", device="cpu", *, backend=None):
+        if backend is None:
+            try:
+                from sentence_transformers import SentenceTransformer
+            except ImportError as exc:
+                raise RuntimeError(
+                    "install cnge-engine[semantic] to use foundation embeddings"
+                ) from exc
+            backend = SentenceTransformer(model_identifier, device=device)
+        self.model, self.device = backend, device
+
+    def embed_text(self, texts):
+        if not texts or not all(isinstance(t, str) and t.strip() for t in texts):
+            raise ValueError("texts must be nonempty strings")
+        with torch.no_grad():
+            result = self.model.encode(texts, convert_to_tensor=True, normalize_embeddings=True)
+        return torch.as_tensor(result, device=self.device).detach()
+
+    @staticmethod
+    def similarity(v1, v2):
+        return (F.normalize(v1, dim=-1) * F.normalize(v2, dim=-1)).sum(-1)
+
+================================================================================
+FILE: cnge_engine/semantic_bridge/manifold_transport.py
+SHA256: b7014707b8fe8c4e559d43e89c7e9531d614064e314d1f5605c25bc3e94e70eb
+================================================================================
+import torch
+from torch import nn
+from torch.nn import functional as F
+
+
+class ManifoldOptimalTransportBridge(nn.Module):
+    """Contrastive projection, not a diffeomorphism or a GW solver."""
+
+    def __init__(self, input_signature_dim, embedding_dim):
+        super().__init__()
+        self.projection = nn.Sequential(
+            nn.Linear(input_signature_dim, 128), nn.SiLU(), nn.Linear(128, embedding_dim)
+        )
+
+    def project_geometry_to_semantic(self, signature):
+        return F.normalize(self.projection(signature), dim=-1)
+
+    def alignment_loss(self, signatures, embeddings, temperature=0.07):
+        if temperature <= 0 or len(signatures) != len(embeddings) or len(signatures) < 2:
+            raise ValueError("need paired batches >=2 and positive temperature")
+        logits = (
+            self.project_geometry_to_semantic(signatures)
+            @ F.normalize(embeddings.detach(), dim=-1).T
+            / temperature
+        )
+        labels = torch.arange(len(signatures), device=signatures.device)
+        return (F.cross_entropy(logits, labels) + F.cross_entropy(logits.T, labels)) / 2
+
+================================================================================
+FILE: cnge_engine/streaming/__init__.py
+SHA256: 6ab843008b659cfcf380ac78b3e097b835e25d212e6087f2e4ae1d2b0c7be651
+================================================================================
+"""CNGE streaming components."""
+
+================================================================================
+FILE: cnge_engine/streaming/asynchronous_orchestrator.py
+SHA256: 4e45dbbd86c6565c2254f75eb7f48dc0dd224942e2f6b85568577d0b346fc643
+================================================================================
+import asyncio
+import time
+from collections import deque
+
+import numpy as np
+import torch
+
+from ..config.system_params import EngineConfig
+from ..crystallization.ast_grammar import ASTGrammar
+from ..crystallization.dynamic_operator_registry import DynamicOperatorRegistry
+from ..crystallization.pareto_compiler import ParetoSymbolicCompiler
+from ..dynamics.hamiltonian_nn import HamiltonianNN
+from ..dynamics.stability_memory import SymplecticSubspaceProtector
+from ..math_core.integrators import ImplicitMidpointIntegrator, Yoshida4thIntegrator
+from ..math_core.symplectic import SymplecticManifold
+from ..noether.conservation_verifier import ConservationVerifier
+from ..noether.symmetry_miner import LieSymmetryMiner
+from ..semantic_bridge.bidirectional_translator import BidirectionalTranslator
+from ..visualization.phase_space_projector import SymplecticPhaseProjector
+from .online_symplectic_filter import OnlineSymplecticStateFilter
+
+
+class EpistemicContinuousOrchestrator:
+    """Bounded, cancellable online training loop. Discoveries are empirical model candidates."""
+
+    def __init__(self, config: EngineConfig, *, separable_gradients=None, canvas=None):
+        self.config = config
+        self.manifold = SymplecticManifold(config.spatial_dim, config.device, config.dtype)
+        self.hamiltonian = HamiltonianNN(self.manifold)
+        self.miner = LieSymmetryMiner(self.manifold)
+        self.protector = SymplecticSubspaceProtector(
+            sum(p.numel() for p in self.hamiltonian.parameters())
+        )
+        self.h_optimizer = torch.optim.SGD(self.hamiltonian.parameters(), lr=config.learning_rate)
+        self.q_optimizer = torch.optim.Adam(self.miner.parameters(), lr=config.learning_rate)
+        self.filter = OnlineSymplecticStateFilter(config.spatial_dim, config.integrator_dt)
+        self.registry = DynamicOperatorRegistry(ASTGrammar(2 * config.spatial_dim))
+        self.compiler = ParetoSymbolicCompiler(
+            self.registry.grammar, mdl_weight=config.pareto_mdl_weight
+        )
+        self.verifier = ConservationVerifier(self.manifold, config.poisson_threshold)
+        self.integrator = ImplicitMidpointIntegrator(
+            config.max_fixed_point_iters, config.integrator_tol
+        )
+        self.separable_gradients = separable_gradients
+        if config.integrator_type == "yoshida4" and separable_gradients is None:
+            raise ValueError(
+                "Yoshida runtime requires explicit separable_gradients=(grad_V,grad_T)"
+            )
+        self.canvas = canvas
+        self.buffer = deque(maxlen=config.buffer_size)
+        self.interventions = asyncio.Queue(maxsize=32)
+        self.tasks = []
+        self.metrics = {}
+        self.discovery_reports = []
+        self.discovery_counter = 0
+        self.updates = 0
+        self.previous = None
+        self.rotation_constraint = False
+        self.offset = torch.zeros(
+            1, 2 * config.spatial_dim, device=config.device, dtype=config.dtype
+        )
+        self.next_replay = time.monotonic() + config.memory_replay_interval_secs
+        self._last_frame = 0.0
+
+    def inject_user_intervention(self, intervention_packet):
+        kind = intervention_packet.get("type")
+        if kind == "perturbation":
+            delta = torch.as_tensor(
+                intervention_packet["delta"], device=self.config.device, dtype=self.config.dtype
+            )
+            if delta.shape != (2 * self.config.spatial_dim,) or not torch.isfinite(delta).all():
+                raise ValueError("delta must be a finite phase vector")
+        elif kind == "constraint":
+            BidirectionalTranslator(None, None, self.registry).prompt_to_geometric_constraint(
+                intervention_packet["prompt"]
+            )
+        else:
+            raise ValueError("unknown intervention type")
+        self.interventions.put_nowait(dict(intervention_packet))
+
+    def _apply_interventions(self):
+        while not self.interventions.empty():
+            packet = self.interventions.get_nowait()
+            if packet["type"] == "perturbation":
+                self.offset += torch.as_tensor(
+                    packet["delta"], device=self.offset.device, dtype=self.offset.dtype
+                )
+                # A discontinuity must not be treated as a dynamical training pair.
+                self.previous = None
+                self.buffer.clear()
+            else:
+                self.rotation_constraint = True
+
+    def _learn(self, pairs):
+        self.h_optimizer.zero_grad(set_to_none=True)
+        loss = self.hamiltonian.trajectory_loss(pairs, self.config.integrator_dt)
+        if self.rotation_constraint:
+            z = pairs[:, 0].detach().requires_grad_(True)
+            d = self.config.spatial_dim
+            L = z[:, :1] * z[:, d + 1 : d + 2] - z[:, 1:2] * z[:, d : d + 1]
+            loss = loss + self.manifold.poisson_bracket(L, self.hamiltonian(z), z).square().mean()
+        loss.backward()
+        params = list(self.hamiltonian.parameters())
+        flat = torch.cat(
+            [(torch.zeros_like(p) if p.grad is None else p.grad).reshape(-1) for p in params]
+        )
+        projected = self.protector.project_gradient(flat)
+        offset = 0
+        for p in params:
+            p.grad = projected[offset : offset + p.numel()].reshape_as(p).clone()
+            offset += p.numel()
+        self.h_optimizer.step()
+        self.q_optimizer.zero_grad(set_to_none=True)
+        mining_loss, metrics = self.miner.compute_loss(pairs[:, 0], self.hamiltonian)
+        gradients = torch.autograd.grad(mining_loss, self.miner.parameters())
+        for p, grad in zip(self.miner.parameters(), gradients):
+            p.grad = grad
+        self.q_optimizer.step()
+        self.metrics = {
+            "dynamics_loss": float(loss.detach()),
+            "mining_loss": float(mining_loss.detach()),
+            **metrics,
+        }
+
+    def _try_discovery(self):
+        if len(self.buffer) < 32:
+            return
+        samples = torch.cat(list(self.buffer))
+        training, heldout = samples[::2], samples[1::2]
+        z = heldout.detach().requires_grad_(True)
+        Q = self.miner(z)
+        bracket = self.manifold.poisson_bracket(Q, self.hamiltonian(z), z)
+        if (
+            float(Q.detach().var()) < self.config.min_invariant_variance
+            or float(bracket.detach().abs().max()) >= self.config.poisson_threshold
+        ):
+            return
+        trajectory = samples.unsqueeze(0)
+        valid, drift = self.verifier.verify_trajectory_invariance(self.miner, trajectory)
+        if not valid:
+            return
+
+        def target(array):
+            with torch.no_grad():
+                tensor = torch.as_tensor(array, device=self.config.device, dtype=self.config.dtype)
+                return self.miner(tensor).cpu().numpy().reshape(-1)
+
+        node = self.compiler.compile(target, training.cpu().numpy())
+        actual = target(heldout.cpu().numpy())
+        predicted = node.evaluate(heldout.cpu().numpy())
+        variance = np.var(actual)
+        r2 = 1 - np.mean((predicted - actual) ** 2) / max(float(variance), 1e-24)
+        if not np.isfinite(r2) or r2 < 0.9999 or node in self.registry.grammar.registered.values():
+            return
+        self.discovery_counter += 1
+        name = f"Q_{self.discovery_counter}"
+        self.registry.register_crystallized_invariant(node, name)
+        self.protector.register_invariant(self.miner, self.hamiltonian, heldout)
+        self.discovery_reports.append(
+            {
+                "name": name,
+                "latex": node.to_latex(),
+                "empirical_drift": drift,
+                "heldout_r2": float(r2),
+                "status": "empirical candidate; not a physical proof",
+            }
+        )
+        # Bound metadata and protected subspace growth in a continuous process.
+        self.discovery_reports = self.discovery_reports[-32:]
+        self.protector.rows = self.protector.rows[-32:]
+        if len(self.registry.grammar.registered) > 32:
+            self.registry.grammar.registered.pop(next(iter(self.registry.grammar.registered)))
+
+    async def process_observation(self, coordinates):
+        self._apply_interventions()
+        q = torch.as_tensor(coordinates, device=self.config.device, dtype=self.config.dtype)
+        if q.ndim == 1:
+            q = q[None]
+        if q.shape != (1, self.config.spatial_dim):
+            raise ValueError("runtime accepts one [d] or [1,d] sensor observation at a time")
+        state = self.filter.update_and_extract_phase_point(q) + self.offset
+        # First finite-difference velocity is undefined; skip it for training.
+        if self.filter.previous is not None and self.updates == 0 and self.previous is None:
+            self.updates += 1
+            return state
+        if self.previous is not None:
+            pair = torch.stack((self.previous, state), 1)
+            recent = list(self.buffer)[-31:] + [state.detach()]
+            if len(recent) > 1:
+                replay = torch.cat(recent)
+                self._learn(torch.stack((replay[:-1], replay[1:]), 1))
+            else:
+                self._learn(pair)
+        self.previous = state.detach()
+        self.buffer.append(state.detach())
+        self.updates += 1
+        if self.config.integrator_type == "yoshida4":
+            q1, p1 = Yoshida4thIntegrator().step_separable(
+                *state.chunk(2, -1), *self.separable_gradients, self.config.integrator_dt
+            )
+            prediction = torch.cat((q1, p1), -1)
+        else:
+            prediction = self.integrator.step(
+                state, self.hamiltonian.predict_vector_field, self.config.integrator_dt
+            )
+        if self.updates % self.config.discovery_interval == 0:
+            self._try_discovery()
+        if time.monotonic() >= self.next_replay:
+            states = torch.cat(list(self.buffer))
+            if len(states) >= 2:
+                self._learn(torch.stack((states[:-1], states[1:]), 1))
+            self.next_replay = time.monotonic() + self.config.memory_replay_interval_secs
+        if self.canvas is not None and time.monotonic() - self._last_frame >= 1 / 60:
+            vertices = SymplecticPhaseProjector(self.config.spatial_dim).project_to_3d(
+                state[:, None]
+            )
+            await self.canvas.broadcast_phase_frame(
+                {
+                    "vertices": vertices.tolist(),
+                    "metrics": self.metrics,
+                    "discoveries": self.discovery_reports,
+                }
+            )
+            self._last_frame = time.monotonic()
+        return prediction.detach()
+
+    async def _consume(self, source):
+        async for coordinates in source:
+            await self.process_observation(coordinates)
+            await asyncio.sleep(0)
+
+    def start_epistemic_runtime(self, source):
+        if any(not task.done() for task in self.tasks):
+            raise RuntimeError("runtime already active")
+        self.tasks = [asyncio.create_task(self._consume(source), name="cnge-assimilation")]
+        return self.tasks[0]
+
+    async def stop(self):
+        for task in self.tasks:
+            if not task.done():
+                task.cancel()
+        results = await asyncio.gather(*self.tasks, return_exceptions=True)
+        self.tasks = []
+        for result in results:
+            if isinstance(result, Exception):
+                raise result
+
+================================================================================
+FILE: cnge_engine/streaming/camera_sensor_feed.py
+SHA256: 4bcce9420098c00b4f74a449c2d91dd450e7c53c391fef5b0a87d2f0a42013dc
+================================================================================
+import asyncio
+from collections import deque
+
+import torch
+
+
+class ContinuousSensorStream:
+    """Bounded telemetry buffer. Camera frames require an explicit frame-to-coordinate extractor."""
+
+    def __init__(self, source_id, target_fps=60, capacity=4096):
+        if target_fps <= 0 or capacity < 1:
+            raise ValueError("invalid stream controls")
+        self.source_id, self.target_fps = source_id, target_fps
+        self.buffer = deque(maxlen=capacity)
+
+    def push(self, coordinates):
+        value = torch.as_tensor(coordinates).detach().clone()
+        if value.ndim != 1 or not torch.isfinite(value).all():
+            raise ValueError("coordinates must be a finite vector")
+        if self.buffer and value.shape != self.buffer[-1].shape:
+            raise ValueError("coordinate dimension changed")
+        self.buffer.append(value)
+
+    def get_state_buffer(self, window_size):
+        if not 0 < window_size <= len(self.buffer):
+            raise ValueError("insufficient samples or invalid window")
+        return torch.stack(list(self.buffer)[-window_size:])
+
+    async def capture(self, coordinate_extractor):
+        try:
+            import cv2
+        except ImportError as exc:
+            raise RuntimeError("install cnge-engine[camera] for camera capture") from exc
+        capture = cv2.VideoCapture(self.source_id)
+        try:
+            if not capture.isOpened():
+                raise RuntimeError("camera source unavailable")
+            while True:
+                ok, frame = await asyncio.to_thread(capture.read)
+                if not ok:
+                    break
+                self.push(coordinate_extractor(frame))
+                await asyncio.sleep(1 / self.target_fps)
+        finally:
+            capture.release()
+
+================================================================================
+FILE: cnge_engine/streaming/online_symplectic_filter.py
+SHA256: a7b6c9fe43ff7710129235e4f53d9971e3733d1934bce1871a8e4a1bf6c22423
+================================================================================
+import torch
+
+
+class OnlineSymplecticStateFilter:
+    """EMA finite differences with explicit constant mass; canonical only for that model."""
+
+    def __init__(self, spatial_dim, dt, mass=1.0, smoothing=1.0):
+        if spatial_dim < 1 or dt <= 0 or mass <= 0 or not 0 < smoothing <= 1:
+            raise ValueError("invalid filter configuration")
+        self.spatial_dim, self.dt, self.mass, self.smoothing = spatial_dim, dt, mass, smoothing
+        self.previous = self.velocity = None
+
+    def update_and_extract_phase_point(self, q_observed):
+        if (
+            q_observed.ndim != 2
+            or q_observed.shape[-1] != self.spatial_dim
+            or not q_observed.is_floating_point()
+            or not torch.isfinite(q_observed).all()
+        ):
+            raise ValueError("expected finite floating [B,d] coordinates")
+        q = q_observed.detach()
+        if self.previous is not None and (
+            self.previous.shape != q.shape
+            or self.previous.device != q.device
+            or self.previous.dtype != q.dtype
+        ):
+            raise ValueError("reset filter before changing batch/device/dtype")
+        velocity = torch.zeros_like(q) if self.previous is None else (q - self.previous) / self.dt
+        self.velocity = (
+            velocity
+            if self.velocity is None
+            else self.smoothing * velocity + (1 - self.smoothing) * self.velocity
+        )
+        self.previous = q.clone()
+        return torch.cat((q, self.mass * self.velocity), -1)
+
+    def reset(self):
+        self.previous = self.velocity = None
+
+================================================================================
+FILE: cnge_engine/visualization/__init__.py
+SHA256: 44b4ad4963bfd1118e2b811707d67d6cc049daddc57caa7118cfb628ca5c8980
+================================================================================
+"""CNGE visualization components."""
+
+================================================================================
+FILE: cnge_engine/visualization/interactive_canvas_bridge.py
+SHA256: 37371b29666924e2c15484297459b9473edea95e6d203909c236cf7535686f71
+================================================================================
+import asyncio
+import inspect
+import json
+
+from websockets.asyncio.server import serve
+from websockets.exceptions import ConnectionClosed
+
+
+class InteractiveCanvasServer:
+    """Loopback WebSocket transport, bounded messages and latest-frame delivery."""
+
+    def __init__(self, port=8080, host="127.0.0.1"):
+        self.port, self.host = port, host
+        self.clients = {}
+        self.callbacks = []
+        self.server = None
+
+    async def start(self):
+        if self.server is not None:
+            raise RuntimeError("server already started")
+        self.server = await serve(
+            self._handler,
+            self.host,
+            self.port,
+            max_size=65536,
+            max_queue=16,
+            origins=[
+                None,
+                f"http://{self.host}:{self.port + 1}",
+                f"http://localhost:{self.port + 1}",
+            ],
+        )
+        self.port = self.server.sockets[0].getsockname()[1]
+        return self
+
+    async def _handler(self, socket):
+        queue = asyncio.Queue(maxsize=1)
+        self.clients[socket] = queue
+
+        async def send():
+            while True:
+                await socket.send(await queue.get())
+
+        sender = asyncio.create_task(send())
+        try:
+            async for message in socket:
+                try:
+                    packet = json.loads(message)
+                    if not isinstance(packet, dict):
+                        raise TypeError("interaction must be an object")
+                    for callback in self.callbacks:
+                        result = callback(packet)
+                        if inspect.isawaitable(result):
+                            await result
+                except (ValueError, TypeError, KeyError, asyncio.QueueFull) as exc:
+                    await socket.send(json.dumps({"error": str(exc)}))
+        except ConnectionClosed:
+            pass
+        finally:
+            self.clients.pop(socket, None)
+            sender.cancel()
+            await asyncio.gather(sender, return_exceptions=True)
+
+    async def broadcast_phase_frame(self, frame_data):
+        message = json.dumps(frame_data, allow_nan=False)
+        for queue in tuple(self.clients.values()):
+            if queue.full():
+                queue.get_nowait()
+            queue.put_nowait(message)
+
+    def on_user_interaction(self, callback):
+        self.callbacks.append(callback)
+
+    async def close(self):
+        if self.server:
+            self.server.close()
+            await self.server.wait_closed()
+            self.server = None
+
+================================================================================
+FILE: cnge_engine/visualization/lie_orbit_renderer.py
+SHA256: 6d1313fa925985939b4071eb3a909c46557a708748f7096f1a9e812d2b0ffb9d
+================================================================================
+import torch
+
+from ..math_core.integrators import ImplicitMidpointIntegrator
+from ..math_core.symplectic import scalar_gradient
+from .phase_space_projector import SymplecticPhaseProjector
+
+
+class LieOrbitVisualizer:
+    def __init__(self, manifold, steps=32, dt=0.01):
+        self.manifold, self.steps, self.dt = manifold, steps, dt
+
+    def generate_streamlines(self, invariant_fn, bounds, grid_res=32):
+        if not 2 <= grid_res <= 128 or bounds[0] >= bounds[1]:
+            raise ValueError("invalid streamline bounds or grid size")
+        axis = torch.linspace(
+            *bounds, grid_res, device=self.manifold.J.device, dtype=self.manifold.J.dtype
+        )
+        x, y = torch.meshgrid(axis, axis, indexing="ij")
+        z = torch.zeros(grid_res**2, self.manifold.J.shape[0], device=axis.device, dtype=axis.dtype)
+        z[:, 0], z[:, self.manifold.spatial_dim] = x.reshape(-1), y.reshape(-1)
+
+        def field(point):
+            point = point.requires_grad_(True)
+            return self.manifold.hamiltonian_vector_field(
+                scalar_gradient(invariant_fn(point), point)
+            )
+
+        integrator = ImplicitMidpointIntegrator()
+        trajectory = [z]
+        for _ in range(self.steps):
+            z = integrator.step(z, field, self.dt).detach()
+            trajectory.append(z)
+        return {
+            "vertices": SymplecticPhaseProjector(self.manifold.spatial_dim).project_to_3d(
+                torch.stack(trajectory, 1)
+            )
+        }
+
+================================================================================
+FILE: cnge_engine/visualization/phase_space_projector.py
+SHA256: 34a2983ff58c2e63aa43c891636628026d8d0350bb52de9224b4d1eef57ae53b
+================================================================================
+import torch
+
+
+class SymplecticPhaseProjector:
+    """Display slice only: odd-dimensional 3D space cannot preserve a symplectic form."""
+
+    def __init__(self, spatial_dim):
+        self.spatial_dim = spatial_dim
+
+    def project_to_3d(self, z_trajectories, projection_plane="canonical_canonical"):
+        if (
+            projection_plane != "canonical_canonical"
+            or z_trajectories.shape[-1] != 2 * self.spatial_dim
+        ):
+            raise ValueError("unsupported projection or wrong phase dimension")
+        d = self.spatial_dim
+        if d == 1:
+            points = torch.stack(
+                (
+                    z_trajectories[..., 0],
+                    z_trajectories[..., 1],
+                    torch.zeros_like(z_trajectories[..., 0]),
+                ),
+                -1,
+            )
+        else:
+            points = z_trajectories[..., [0, 1, d]]
+        return points.detach().cpu().numpy()
+
+================================================================================
+FILE: docs/PULL_REQUEST.md
+SHA256: 8e4a48c3c552d01cd4e6072992a654c2ab0255a3495915661b953fdd9ceb842b
+================================================================================
+# Implement CNGE scientific engine and reproducible source archive
+
+The repository previously contained only a title. This change adds an executable CPU-first reference implementation of the attached Continuous Neuro-Geometric Epistemic Engine architecture: canonical mechanics, differentiable integrators, Hamiltonian/Lagrangian networks, invariant mining, local parameter protection, bounded symbolic synthesis, optional semantic/camera adapters, online learning, and a live canvas with WebSocket interventions.
+
+The README provides installation, demos, tests and integration instructions. `docs/VALIDATION.md` maps the implementation to the specification and explicitly distinguishes empirical checks from the unproven research and production guarantees in the original request. The oscillator demo uses a known analytical invariant and does not claim autonomous neural discovery. `CNGE_SOURCE.txt` contains the complete versioned text sources, including tests and documentation, with per-file SHA-256 hashes and a deterministic regeneration script.
+
+Validation: see `docs/RESULTS.md` for the executed checks and measured results. Optional GPU, real-camera and downloaded foundation-model integrations are not validated in this environment. The workflow includes CPU CI and reproducible source-export verification.
+
+================================================================================
+FILE: docs/RESULTS.md
+SHA256: c7b13527a87bdc020861f24d8262799bfa47c7d10252d1409b91aa053425b9ae
+================================================================================
+# Resultados locais
+
+Validação em CPU, Python 3.12, PyTorch 2.15.0+cpu. As versões efetivamente usadas estão em `VALIDATED_VERSIONS.txt`. Não havia CUDA disponível.
+
+- Suíte rápida: **36 testes aprovados**. Os três testes longos são ignorados explicitamente nessa invocação e executados em separado.
+- Suíte longa: **3 testes aprovados**, 150.000 passos no total, em **842,43 segundos**. Yoshida em Hénon–Heiles; midpoint em Hénon–Heiles e pêndulo duplo. Todos mantiveram o erro do mapa tangente simplético acumulado abaixo de **10⁻⁶**. A execução longa iniciou antes da adição de três testes rápidos; os 36 testes rápidos finais foram validados separadamente. Total: **39 testes aprovados**, sem falhas.
+- `ruff check` e `ruff format --check`: aprovados.
+- Compilação de bytecode (`compileall`) e `pip check`: aprovados.
+- Distribuições `sdist` e `wheel`: geradas com sucesso; smoke test de um wheel instalado fora do checkout aprovado.
+- Demonstração do oscilador 3D, 1.000 passos: drift relativo máximo de Lz **6,439293542825906 × 10⁻¹⁵**, expressão `z₀z₄ − z₁z₃`, **R² = 1,0** em pontos separados do ajuste. O alvo é um invariante analítico conhecido, não uma descoberta neural livre.
+- Chromium com Playwright: telemetria WebSocket, aplicação de restrição xy, perturbação via canvas, ausência de erros JavaScript e layout móvel de 390 px aprovados. O teste reutilizável está em `tools/browser_smoke.cjs`.
+- Smoke test de servidor finito: 20 observações e fechamento normal dos servidores.
+- Benchmark indicativo de 100 atualizações após aquecimento: **135,60 atualizações/s**, CPU com uma thread de PyTorch, sem canvas e sem compilação simbólica. O tempo inclui aprendizado Hamiltoniano, mineração e integração. Não é uma garantia de desempenho, benchmark GPU ou medição do loop com todas as integrações ativas.
+- Modelo Hamiltoniano padrão d=2: 33.793 parâmetros. Modelo Noether padrão: 8.705 parâmetros.
+
+As integrações com câmera real, modelo fundacional baixado e CUDA não foram executadas. A CI foi configurada, mas uma execução remota só pode ser confirmada depois que o provedor a executar.
+
+Condições externas verificadas: acesso Git de leitura e escrita ao GitHub funcionou. A criação de PR foi tentada, mas o proxy respondeu `Forbidden` ao endpoint `https://api.github.com/graphql`; o domínio precisa ser liberado nas configurações de rede do ambiente antes de repetir `gh pr create`. O acesso ao arquivo de configuração de `BAAI/bge-m3` no Hugging Face também recebeu HTTP 403 do proxy, e não havia dispositivos `/dev/video*` disponíveis. Nenhuma dessas verificações estabelece validação das integrações opcionais.
+
+================================================================================
+FILE: docs/SPECIFICATION.txt
+SHA256: 850a916ca9d3ca73157fcc7c5cc5cd19aba28b2fbbc75fe69446e0a34bb84741
+================================================================================
+SYSTEM ARCHITECTURE & MATHEMATICAL SPECIFICATION
+
+Continuous Neuro-Geometric Epistemic Engine (CNGE)
+
+A Production-Ready, Autonomous Scientific Discovery Architecture
+
+1. MATHEMATICAL FORMALISM & SYSTEM FOUNDATIONS
+
+The engine models physical and abstract dynamic phenomena on an unconstrained,
+finite-dimensional, smooth canonical symplectic phase space manifold
+\mathcal{M} = T^*Q \cong \mathbb{R}^{2d}, parametrized by generalized canonical
+coordinates:
+z = \begin{bmatrix} q \\ p \end{bmatrix} \in \mathbb{R}^{2d}, \quad q \in \mathbb{R}^d \text{ (configuration)}, \quad p \in \mathbb{R}^d \text{ (conjugate momentum)}
+
+1.1. Differential Geometric Invariants
+
+The manifold is equipped with a closed, non-degenerate, differential 2-form (the
+canonical symplectic form) \omega \in \Omega^2(\mathcal{M}):
+\omega = \sum_{i=1}^d dq^i \wedge dp^i \iff \omega(u, v) = u^T J v, \quad \forall u, v \in T_z\mathcal{M}
+where J \in \text{Sp}(2d, \mathbb{R}) is the canonical skew-symmetric symplectic
+matrix:
+J = \begin{bmatrix} \mathbf{0}_d & \mathbf{I}_d \\ -\mathbf{I}_d & \mathbf{0}_d \end{bmatrix}, \quad J^T = -J = J^{-1}, \quad \det(J) = 1, \quad J^2 = -\mathbf{I}_{2d}
+
+1.2. Hamiltonian Dynamics & Symplectomorphism Flow
+
+Given a continuously differentiable parameterized energy functional
+H_\theta: \mathcal{M} \to \mathbb{R}, the temporal evolution of any system state
+obeys Hamilton's canonical vector field X_H \in \mathfrak{X}(\mathcal{M}):
+\dot{z}(t) = X_H(z(t)) = J \nabla_z H_\theta(z(t)) \iff \begin{cases} \dot{q} = \nabla_p H_\theta(q, p) \\ \dot{p} = -\nabla_q H_\theta(q, p) \end{cases}
+The trajectory map \Phi_t: \mathcal{M} \to \mathcal{M} induced by X_H defines an
+exact 1-parameter group of symplectomorphisms satisfying:
+\left( \frac{\partial \Phi_t(z)}{\partial z} \right)^T J \left( \frac{\partial \Phi_t(z)}{\partial z} \right) = J, \quad \det\left( \frac{\partial \Phi_t(z)}{\partial z} \right) = 1 \quad \forall t \in \mathbb{R}
+
+1.3. Poisson Lie Algebra & Noether Conservation
+
+For smooth functionals F, G \in C^\infty(\mathcal{M}), the bilinear,
+antisymmetric Poisson bracket is defined by:
+\{F, G\} = \omega(X_F, X_G) = (\nabla_z F)^T J (\nabla_z G) = \sum_{i=1}^d \left( \frac{\partial F}{\partial q^i} \frac{\partial G}{\partial p^i} - \frac{\partial F}{\partial p^i} \frac{\partial G}{\partial q^i} \right)
+By Noether's Theorem, a functional Q_\phi \in C^\infty(\mathcal{M}) corresponds
+to an invariant of motion along the system trajectory generated by H_\theta if
+and only if its Lie derivative along X_H vanishes:
+\mathcal{L}_{X_H} Q_\phi = \frac{d Q_\phi}{dt} = \{Q_\phi, H_\theta\} = (\nabla_z Q_\phi)^T J (\nabla_z H_\theta) \equiv 0
+When multiple invariants \{Q_1, \dots, Q_k\} commute closure-wise, they define
+the basis of a Lie algebra \mathfrak{g} with structure constants c_{ab}^c:
+\{Q_a, Q_b\} = \sum_{c=1}^k c_{ab}^c Q_c
+
+2. DIRECTORY STRUCTURE
+
+cnge_engine/
+├── __init__.py
+├── config/
+│   ├── __init__.py
+│   └── system_params.py
+├── math_core/
+│   ├── __init__.py
+│   ├── symplectic.py
+│   ├── integrators.py
+│   └── lie_algebra.py
+├── dynamics/
+│   ├── __init__.py
+│   ├── hamiltonian_nn.py
+│   ├── lagrangian_nn.py
+│   └── stability_memory.py
+├── noether/
+│   ├── __init__.py
+│   ├── symmetry_miner.py
+│   └── conservation_verifier.py
+├── crystallization/
+│   ├── __init__.py
+│   ├── topology_analyzer.py
+│   ├── ast_grammar.py
+│   ├── pareto_compiler.py
+│   └── dynamic_operator_registry.py
+├── semantic_bridge/
+│   ├── __init__.py
+│   ├── foundation_embedding.py
+│   ├── manifold_transport.py
+│   └── bidirectional_translator.py
+├── streaming/
+│   ├── __init__.py
+│   ├── camera_sensor_feed.py
+│   ├── online_symplectic_filter.py
+│   └── asynchronous_orchestrator.py
+├── visualization/
+│   ├── __init__.py
+│   ├── phase_space_projector.py
+│   ├── lie_orbit_renderer.py
+│   └── interactive_canvas_bridge.py
+└── tests/
+    ├── __init__.py
+    ├── test_symplectic_invariance.py
+    ├── test_poisson_conservation.py
+    ├── test_noether_crystallization.py
+    └── test_continual_learning_orthogonality.py
+
+3. FILE-BY-FILE EXHAUSTIVE TECHNICAL SPECIFICATION
+
+3.1. config/system_params.py
+
+  - Purpose: Hardware configuration, tensor device declarations, hyperparameter
+    thresholds, precision dtypes, and boundary constants.
+  - Specifications:
+      - Dataclass EngineConfig:
+          - spatial_dim: int: Generalized coordinate dimension d. Phase space
+            dimension equals 2d.
+          - device: str: Primary device target ("cuda" or "cpu").
+          - dtype: torch.dtype: Numerical precision, default torch.float32 (or
+            torch.float64 for high-precision symplectic integration tests).
+          - integrator_type: str: Set to "implicit_midpoint" or "yoshida4".
+          - integrator_dt: float: Default step size \Delta t = 0.01.
+          - integrator_tol: float: Convergence threshold for implicit
+            fixed-point iterations \epsilon = 10^{-12}.
+          - max_fixed_point_iters: int: Maximum implicit iterations, default 20.
+          - poisson_threshold: float: Max absolute Poisson bracket threshold
+            |\{Q, H\}| < 10^{-4}.
+          - pareto_mdl_weight: float: Regularization parameter balancing
+            Description Length vs R^2 fit, default \lambda_{\text{MDL}} = 0.05.
+          - memory_replay_interval_secs: int: Background consolidation trigger
+            time, default 3600.
+          - embedding_dim: int: Latent size of the coupled scientific semantic
+            foundation space (e.g., 1024 for BAAI/bge-m3, 3072 for
+            text-embedding-3-large).
+
+3.2. math_core/symplectic.py
+
+  - Purpose: Implements the intrinsic symplectic geometry operators,
+    differential 2-form evaluation, Poisson bracket algebra, and Hamiltonian
+    vector field calculations.
+  - Mathematical Operations:
+      - Canonical Symplectic Matrix generation:
+        J = \begin{bmatrix} \mathbf{0}_{d \times d} & \mathbf{I}_{d \times d} \\ -\mathbf{I}_{d \times d} & \mathbf{0}_{d \times d} \end{bmatrix}
+      - Canonical Poisson Bracket between arbitrary differentiable scalar fields
+        f, g: \mathbb{R}^{2d} \to \mathbb{R}:
+        \{f, g\}(z) = \left(\nabla_z f\right)^T J \left(\nabla_z g\right) = \sum_{i=1}^d \left( \frac{\partial f}{\partial z_i} \frac{\partial g}{\partial z_{i+d}} - \frac{\partial f}{\partial z_{i+d}} \frac{\partial g}{\partial z_i} \right)
+  - Class & Signatures:
+      - class SymplecticManifold:
+          - __init__(spatial_dim: int, device: torch.device, dtype:
+            torch.dtype): Allocates J as an invariant registered buffer of shape
+            [2*d, 2*d].
+          - canonical_matrix() -> torch.Tensor: Returns J.
+          - hamiltonian_vector_field(grad_H: torch.Tensor) -> torch.Tensor:
+              - Input: grad_H shape [B, 2*d].
+              - Output: X_H = grad_H @ J.T shape [B, 2*d].
+          - poisson_bracket(f: torch.Tensor, g: torch.Tensor, z: torch.Tensor)
+            -> torch.Tensor:
+              - Computes exact autodiff gradients:
+                \nabla_z f = \frac{\partial \sum f}{\partial z} and
+                \nabla_z g = \frac{\partial \sum g}{\partial z}.
+              - Evaluates batch dot-product with symplectic metric:
+                \text{sum}(\nabla_z f \cdot (\nabla_z g @ J^T), \text{dim}=-1, \text{keepdim}=\text{True}).
+              - Input: f shape [B, 1], g shape [B, 1], z shape [B, 2*d] with
+                requires_grad=True.
+              - Output: [B, 1].
+          - check_symplectomorphism(jacobian_map: torch.Tensor, tol: float
+            = 1e-6) -> Tuple[bool, torch.Tensor]:
+              - Evaluates symplectic structural drift: E = M^T J M - J.
+              - Input: jacobian_map
+                M = \frac{\partial \Phi_{\Delta t}(z)}{\partial z} shape
+                [B, 2*d, 2*d].
+              - Output: (torch.max(torch.norm(E, p='fro', dim=[-2, -1])) < tol,
+                E).
+
+3.3. math_core/integrators.py
+
+  - Purpose: Structure-preserving numerical geometric integrators enforcing zero
+    artificial dissipation and volume preservation over infinite temporal
+    horizons.
+  - Mathematical Operations:
+      - Implicit Midpoint Rule (2nd-order Symplectic Runge-Kutta):
+        z_{n+1} = z_n + \Delta t \, X_H\left( \frac{z_n + z_{n+1}}{2} \right) = z_n + \Delta t \, J \nabla_z H\left( \frac{z_n + z_{n+1}}{2} \right)
+        Solved via local Newton-Raphson or fixed-point Banach iteration.
+      - Yoshida 4th-order Symplectic Integrator: For separable Hamiltonians
+        H(q, p) = T(p) + V(q) using coefficients:
+        w_1 = \frac{1}{2 - 2^{1/3}}, \quad w_0 = -\frac{2^{1/3}}{2 - 2^{1/3}}, \quad c_1 = c_4 = \frac{w_1}{2}, \quad c_2 = c_3 = \frac{w_1 + w_0}{2}
+        d_1 = d_3 = w_1, \quad d_2 = w_0, \quad d_4 = 0
+  - Class & Signatures:
+      - class SymplecticIntegrator(ABC):
+          - @abstractmethod step(z_t: torch.Tensor, vector_field_fn:
+            Callable[[torch.Tensor], torch.Tensor], dt: float) -> torch.Tensor
+      - class ImplicitMidpointIntegrator(SymplecticIntegrator):
+          - __init__(max_iters: int = 20, tol: float = 1e-12)
+          - step(z_t: torch.Tensor, vector_field_fn: Callable[[torch.Tensor],
+            torch.Tensor], dt: float) -> torch.Tensor:
+              - Input: z_t shape [B, 2*d].
+              - Output: z_{t+1} shape [B, 2*d].
+      - class Yoshida4thIntegrator(SymplecticIntegrator):
+          - __init__()
+          - step_separable(q_t: torch.Tensor, p_t: torch.Tensor, grad_V_fn:
+            Callable[[torch.Tensor], torch.Tensor], grad_T_fn:
+            Callable[[torch.Tensor], torch.Tensor], dt: float) ->
+            Tuple[torch.Tensor, torch.Tensor]
+
+3.4. math_core/lie_algebra.py
+
+  - Purpose: Computes infinitesimal Lie group actions, Lie brackets of vector
+    fields, Killing equations, and adjoint representations.
+  - Mathematical Operations:
+      - Lie bracket of two vector fields X, Y \in \mathfrak{X}(\mathcal{M}):
+        [X, Y](z) = \left( \mathcal{J}_Y(z) X(z) - \mathcal{J}_X(z) Y(z) \right)
+        where
+        \mathcal{J}_X(z) = \frac{\partial X(z)}{\partial z} \in \mathbb{R}^{2d \times 2d}
+        is the Jacobian matrix.
+      - Lie derivative of metric tensor g along vector field X (Killing symmetry
+        condition):
+        \mathcal{L}_X g = 0 \iff X^k \partial_k g_{ij} + g_{kj} \partial_i X^k + g_{ik} \partial_j X^k = 0
+  - Class & Signatures:
+      - class LieAlgebraEngine:
+          - lie_bracket_fields(X_fn: Callable[[torch.Tensor], torch.Tensor],
+            Y_fn: Callable[[torch.Tensor], torch.Tensor], z: torch.Tensor) ->
+            torch.Tensor:
+              - Computes vector field Lie bracket via exact Jacobian-vector
+                products (autograd forward/backward).
+              - Input: Vector fields taking [B, 2*d] and returning [B, 2*d],
+                evaluated at z [B, 2*d].
+              - Output: [X, Y](z) shape [B, 2*d].
+          - structure_constants(basis_fields: List[Callable[[torch.Tensor],
+            torch.Tensor]], z_samples: torch.Tensor) -> torch.Tensor:
+              - Decomposes [X_a, X_b] = \sum_c f_{ab}^c X_c via linear
+                least-squares over phase-space point evaluations.
+              - Output: Rank-3 tensor f \in \mathbb{R}^{k \times k \times k}.
+
+3.5. dynamics/hamiltonian_nn.py
+
+  - Purpose: Neural functional parametrization of continuous energy scalar
+    manifolds H_\theta(q, p).
+  - Mathematical Operations:
+      - Continuous potential energy functional parametrization:
+        H_\theta(z) = \mathcal{N}_\theta(z), \quad z \in \mathbb{R}^{2d}, \quad H_\theta \in C^\infty(\mathbb{R}^{2d}, \mathbb{R})
+      - Activation functions are strictly chosen with infinite continuous
+        non-zero derivatives C^\infty (e.g.,
+        \text{Softplus}_\beta(x) = \frac{1}{\beta}\ln(1 + e^{\beta x}) with
+        \beta \ge 5, or Gaussian Radial Basis / Sine periodic activations) to
+        prevent gradient discontinuities in Poisson commutators.
+  - Class & Signatures:
+      - class HamiltonianNN(torch.nn.Module):
+          - __init__(manifold: SymplecticManifold, hidden_dims: List[int] =
+            [128, 128, 128], beta: float = 5.0)
+          - forward(z: torch.Tensor) -> torch.Tensor:
+              - Input: z shape [B, 2*d].
+              - Output: H shape [B, 1].
+          - predict_vector_field(z: torch.Tensor) -> torch.Tensor:
+              - Computes exact analytical gradient
+                \nabla_z H_\theta(z) = \frac{\partial H_\theta}{\partial z}.
+              - Evaluates X_H(z) = J \nabla_z H_\theta(z).
+              - Input: z shape [B, 2*d].
+              - Output: X_H shape [B, 2*d].
+          - trajectory_loss(z_observed: torch.Tensor, dt: float) ->
+            torch.Tensor:
+              - Evaluates continuous residual against discrete telemetry points
+                (z_t, z_{t+1}):
+                \mathcal{L}_{\text{dyn}} = \frac{1}{B} \sum_{i=1}^B \left\| \frac{z_{t+1} - z_t}{\Delta t} - X_H\left(\frac{z_t + z_{t+1}}{2}\right) \right\|_2^2
+              - Input: z_observed shape [B, 2, 2*d], dt float.
+              - Output: Scalar tensor.
+
+3.6. dynamics/lagrangian_nn.py
+
+  - Purpose: Dual Lagrangian formulation over configuration tangent bundles TQ,
+    generating Euler-Lagrange trajectories via Legendre transformation:
+    \mathcal{L}(q, \dot{q}) = p \cdot \dot{q} - H(q, p), \quad \frac{d}{dt}\left( \frac{\partial \mathcal{L}}{\partial \dot{q}} \right) - \frac{\partial \mathcal{L}}{\partial q} = 0
+  - Class & Signatures:
+      - class LagrangianNN(torch.nn.Module):
+          - __init__(spatial_dim: int, hidden_dims: List[int] = [128, 128])
+          - forward(q: torch.Tensor, q_dot: torch.Tensor) -> torch.Tensor:
+            Returns scalar Lagrangian \mathcal{L}(q, \dot{q}) shape [B, 1].
+          - compute_acceleration(q: torch.Tensor, q_dot: torch.Tensor) ->
+            torch.Tensor:
+              - Inverts the generalized Hessian / mass matrix
+                \mathcal{M}_{ij}(q, \dot{q}) = \frac{\partial^2 \mathcal{L}}{\partial \dot{q}^i \partial \dot{q}^j}:
+                \ddot{q} = \mathcal{M}^{-1} \left( \frac{\partial \mathcal{L}}{\partial q} - \frac{\partial^2 \mathcal{L}}{\partial \dot{q} \partial q} \dot{q} \right)
+              - Output: \ddot{q} shape [B, d].
+
+3.7. dynamics/stability_memory.py
+
+  - Purpose: Anti-catastrophic forgetting engine based on Riemannian subspace
+    isolation and symplectic orthogonal projection.
+  - Mathematical Operations:
+      - Let \theta \in \mathbb{R}^P be the flat parameter vector of H_\theta.
+      - For K validated conserved quantities \{Q_1, \dots, Q_K\}, the
+        sensitivity Jacobian matrix of invariants with respect to model
+        parameters is:
+        A \in \mathbb{R}^{K \times P}, \quad A_{k, j} = \mathbb{E}_{z \sim \mathcal{M}} \left[ \frac{\partial \{Q_k, H_\theta\}(z)}{\partial \theta_j} \right]
+      - The parameter tangent space is partitioned into a protected subspace
+        \mathcal{V}_{\text{prot}} = \text{span}(A^T) and a plastic subspace
+        \mathcal{V}_{\text{free}} = \text{null}(A).
+      - Any unconstrained gradient of a new incoming task
+        \nabla_\theta L_{\text{new}} is projected onto the nullspace via the
+        orthogonal projection operator:
+        P_{\text{null}} = \mathbf{I}_P - A^T (A A^T + \lambda \mathbf{I}_K)^{-1} A
+        \widetilde{\nabla}_\theta L = P_{\text{null}} \nabla_\theta L_{\text{new}}
+      - This guarantees strictly:
+        \frac{\partial \{Q_k, H_{\theta + \Delta \theta}\}}{\partial t} \approx 0 \quad \forall k \in \{1, \dots, K\}.
+  - Class & Signatures:
+      - class SymplecticSubspaceProtector:
+          - __init__(parameter_dim: int, damping: float = 1e-4)
+          - register_invariant(Q_invariant_fn: Callable[[torch.Tensor],
+            torch.Tensor], H_model: HamiltonianNN, validation_samples:
+            torch.Tensor)
+          - project_gradient(raw_gradient: torch.Tensor) -> torch.Tensor:
+              - Input: Flat gradient vector [P].
+              - Output: Orthogonalized gradient vector [P].
+
+3.8. noether/symmetry_miner.py
+
+  - Purpose: Neural mining of infinitesimal generators of Lie symmetries through
+    continuous optimization over Poisson commutators.
+  - Mathematical Operations:
+      - Parametrizes a candidate conserved scalar invariant functional
+        Q_\phi: \mathcal{M} \to \mathbb{R}.
+      - Objective Functional (Multi-Objective Optimization):
+        \mathcal{L}_{\text{Noether}}(\phi) = \mathcal{L}_{\text{comm}} + \lambda_{\text{var}} \mathcal{L}_{\text{non-triv}} + \lambda_{\text{orth}} \mathcal{L}_{\text{orth}}
+        \mathcal{L}_{\text{comm}} = \mathbb{E}_{z \sim \mathcal{M}} \left[ \Big( \{Q_\phi, H_\theta\}(z) \Big)^2 \right]
+        \mathcal{L}_{\text{non-triv}} = \exp\left( - \text{Var}_{z \sim \mathcal{M}}[Q_\phi(z)] \right)
+        \mathcal{L}_{\text{orth}} = \left( \frac{\mathbb{E}_z [ \langle \nabla_z Q_\phi, \nabla_z H_\theta \rangle ]}{\sqrt{\mathbb{E}_z [\|\nabla_z Q_\phi\|^2]} \sqrt{\mathbb{E}_z [\|\nabla_z H_\theta\|^2]}} \right)^2
+      - \mathcal{L}_{\text{comm}} drives Poisson commutation to zero.
+      - \mathcal{L}_{\text{non-triv}} prevents the collapsed trivial solution
+        Q_\phi(z) = \text{const}.
+      - \mathcal{L}_{\text{orth}} prevents Q_\phi from simply rediscovering the
+        Hamiltonian H_\theta itself.
+  - Class & Signatures:
+      - class LieSymmetryMiner(torch.nn.Module):
+          - __init__(manifold: SymplecticManifold, hidden_dims: List[int] =
+            [64, 64, 64])
+          - forward(z: torch.Tensor) -> torch.Tensor: Output Q shape [B, 1].
+          - compute_loss(z_batch: torch.Tensor, H_model: HamiltonianNN) ->
+            Tuple[torch.Tensor, Dict[str, float]]:
+              - Input: z_batch shape [B, 2*d], H_model.
+              - Output: (total_loss, metrics_dict).
+
+3.9. noether/conservation_verifier.py
+
+  - Purpose: Rigorous verification suite for mined invariants using high-order
+    statistical confidence bounds (Hoeffding concentration inequalities) over
+    continuous trajectory integrals.
+  - Class & Signatures:
+      - class ConservationVerifier:
+          - __init__(manifold: SymplecticManifold, tolerance: float = 1e-4,
+            confidence: float = 0.999)
+          - verify_trajectory_invariance(Q_fn: Callable[[torch.Tensor],
+            torch.Tensor], trajectories: torch.Tensor) -> Tuple[bool, float]:
+              - Input: trajectories shape [B, T, 2*d].
+              - Computes max empirical drift:
+                \max_{t \in [0, T]} \frac{|Q(z_t) - Q(z_0)|}{|Q(z_0)| + \epsilon}.
+              - Output: (is_valid, max_drift_metric).
+
+3.10. crystallization/topology_analyzer.py
+
+  - Purpose: Analyzes continuous geometric attractors, identifies Poincaré
+    section recurrences, and extracts topological invariants to trigger symbolic
+    crystallization.
+  - Mathematical Operations:
+      - Constructs dynamic transition graphs of phase orbits.
+      - Evaluates local metric tensor
+        g_{ij}(z) = \sum_{k} \frac{\partial \Phi_{\tau}^k}{\partial z^i} \frac{\partial \Phi_{\tau}^k}{\partial z^j}.
+      - Computes Poincaré first return maps \mathcal{P}: \Sigma \to \Sigma
+        across co-dimension 1 transverse surfaces:
+        \Sigma = \{z \in \mathcal{M} \mid s(z) = 0, \, \nabla s(z) \cdot X_H(z) \neq 0\}
+  - Class & Signatures:
+      - class PhaseTopologyAnalyzer:
+          - __init__(manifold: SymplecticManifold)
+          - compute_poincare_map(trajectory: torch.Tensor, surface_fn:
+            Callable[[torch.Tensor], torch.Tensor]) -> torch.Tensor:
+              - Returns intersection points on hypersurface \Sigma. Shape:
+                [N_intersections, 2*d - 1].
+          - detect_attractor_dimensionality(trajectory: torch.Tensor) -> float:
+              - Computes Correlation Dimension D_2 via Grassberger-Procaccia
+                algorithm over continuous embeddings.
+
+3.11. crystallization/ast_grammar.py
+
+  - Purpose: Defines the Context-Free Grammar (CFG), Abstract Syntax Tree (AST)
+    node representations, and analytical evaluation engine for symbolic
+    synthesis.
+  - Grammar Production Rules (G):
+    \text{Expr} \to \text{Expr} \oplus \text{Expr} \mid \text{UnaryOp}(\text{Expr}) \mid \text{Var}(q_i, p_i) \mid \text{Const}(c)
+    \oplus \in \{+, -, \times, \div\}, \quad \text{UnaryOp} \in \{\sin, \cos, \text{exp}, \ln, (\cdot)^2, \sqrt{\cdot}\}
+  - Class & Signatures:
+      - class ASTNode:
+          - op: str: Operator identifier.
+          - children: List['ASTNode']: Sub-trees.
+          - value: Optional[float]: Constant scalar parameter.
+          - evaluate(z: np.ndarray) -> np.ndarray: Vectorized point evaluation
+            over phase space array [B, 2*d].
+          - to_latex() -> str: Emits standard LaTeX string.
+          - complexity() -> int: Structural Kolmogorov complexity count (leaf
+            count + operational weight).
+
+3.12. crystallization/pareto_compiler.py
+
+  - Purpose: Synthesizes symbolic closed-form equations from neural
+    representations H_\theta and Q_\phi by optimizing the Pareto frontier
+    between Description Length (MDL) and Functional Equivalence (R^2).
+  - Mathematical Operations:
+      - Objective Function:
+        \min_{\text{Tree } T \in \mathcal{T}} \left( \frac{1}{N} \sum_{i=1}^N \left| T(z_i) - Q_\phi(z_i) \right|^2 + \lambda_{\text{MDL}} \cdot \mathcal{K}(T) \right)
+        where \mathcal{K}(T) is the structural prefix description length in
+        bits:
+        \mathcal{K}(T) = \sum_{node \in T} \log_2(|\text{ProductionRules}(\text{node.type})|)
+  - Class & Signatures:
+      - class ParetoSymbolicCompiler:
+          - __init__(grammar: ASTGrammar, max_depth: int = 6, beam_width: int
+            = 64)
+          - compile(target_eval_fn: Callable[[np.ndarray], np.ndarray],
+            z_domain: np.ndarray, r2_target: float = 0.9999) -> ASTNode:
+              - Input: target_eval_fn (e.g. evaluating Q_\phi), domain array
+                [B, 2*d].
+              - Output: Optimal Pareto-frontier ASTNode.
+
+3.13. crystallization/dynamic_operator_registry.py
+
+  - Purpose: The self-expansion engine. Once an invariant (e.g., angular
+    momentum, Runge-Lenz vector) is verified, it is automatically compiled and
+    added as a first-class primitive operator into ASTGrammar.
+  - Class & Signatures:
+      - class DynamicOperatorRegistry:
+          - __init__(base_grammar: ASTGrammar)
+          - register_crystallized_invariant(symbolic_node: ASTNode, latex_name:
+            str):
+              - Adds a new terminal / non-terminal token to the grammar with
+                operational complexity equal to
+                \mathcal{K}(\text{symbolic\_node}).
+          - get_active_grammar() -> ASTGrammar
+
+3.14. semantic_bridge/foundation_embedding.py
+
+  - Purpose: Interfaces with an efficient, pretrained multimodal/scientific
+    foundation embedding model (e.g., BAAI/bge-m3 or local scientific
+    sentence-transformers running on GPU).
+  - Class & Signatures:
+      - class FoundationEmbeddingBridge:
+          - __init__(model_identifier: str = "BAAI/bge-m3", device: str =
+            "cuda")
+          - embed_text(texts: List[str]) -> torch.Tensor: Returns semantic
+            vectors shape [N, D_emb].
+          - similarity(v1: torch.Tensor, v2: torch.Tensor) -> torch.Tensor:
+            Cosine alignment \frac{v_1 \cdot v_2}{\|v_1\| \|v_2\|}.
+
+3.15. semantic_bridge/manifold_transport.py
+
+  - Purpose: Computes the smooth bridge (diffeomorphic alignment map) between
+    the symplectic phase-space manifold \mathcal{M} and the frozen semantic
+    foundation embedding space \mathcal{E}.
+  - Mathematical Operations:
+      - Let \mathcal{T}_{\text{symb}} be the space of crystallized operators.
+        Each operator T possesses an evaluation signature vector in phase-space
+        \mathbf{v}_{\mathcal{M}} = [T(z_1), \dots, T(z_M)]^T \in \mathbb{R}^M.
+      - An alignment projection network
+        \Psi_\xi: \mathbb{R}^M \to \mathbb{R}^{D_{\text{emb}}} maps geometric
+        invariant behavior directly into the frozen embedding space.
+      - Optimized via normalized Gromov-Wasserstein / Contrastive InfoNCE
+        matching:
+        \mathcal{L}_{\text{align}} = -\sum_{k} \log \frac{\exp\left( \text{sim}(\Psi_\xi(\mathbf{v}_{\mathcal{M}}^k), \mathbf{e}_{\text{text}}^k) / \tau \right)}{\sum_j \exp\left( \text{sim}(\Psi_\xi(\mathbf{v}_{\mathcal{M}}^k), \mathbf{e}_{\text{text}}^j) / \tau \right)}
+  - Class & Signatures:
+      - class ManifoldOptimalTransportBridge(torch.nn.Module):
+          - __init__(input_signature_dim: int, embedding_dim: int)
+          - project_geometry_to_semantic(signature: torch.Tensor) ->
+            torch.Tensor: Maps [B, M] to [B, D_emb].
+
+3.16. semantic_bridge/bidirectional_translator.py
+
+  - Purpose: Manages human prompt-to-constraint translation and machine
+    discovery-to-natural language synthesis.
+  - Class & Signatures:
+      - class BidirectionalTranslator:
+          - __init__(embedder: FoundationEmbeddingBridge, transport:
+            ManifoldOptimalTransportBridge, registry: DynamicOperatorRegistry)
+          - prompt_to_geometric_constraint(user_prompt: str) ->
+            GeometricConstraint:
+              - Translates: "Assume rotational symmetry in the xy-plane" into a
+                projection tensor constraint on J and Killing components.
+          - discovery_to_natural_explanation(symbolic_node: ASTNode) ->
+            Dict[str, Any]:
+              - Emits LaTeX equation, nearest scientific literature concepts,
+                and physical interpretation.
+
+3.17. streaming/camera_sensor_feed.py
+
+  - Purpose: Continuous asynchronous ingestion of live physical camera streams,
+    laboratory telemetry, or real-time simulation queues.
+  - Class & Signatures:
+      - class ContinuousSensorStream:
+          - __init__(source_id: Union[int, str], target_fps: int = 60)
+          - get_state_buffer(window_size: int) -> torch.Tensor: Yields sliding
+            continuous temporal observation tensors shape [window_size, d].
+
+3.18. streaming/online_symplectic_filter.py
+
+  - Purpose: Performs real-time canonical momentum extraction from raw
+    continuous coordinate streams q(t) using regularized differential tracking:
+    p(t) \approx \mathcal{M}_{\text{est}} \frac{dq}{dt}
+  - Class & Signatures:
+      - class OnlineSymplecticStateFilter:
+          - __init__(spatial_dim: int, dt: float)
+          - update_and_extract_phase_point(q_observed: torch.Tensor) ->
+            torch.Tensor:
+              - Input: Raw coordinates [B, d].
+              - Output: Filtered canonical state z = [q, p]^T shape [B, 2*d].
+
+3.19. streaming/asynchronous_orchestrator.py
+
+  - Purpose: The central infinite execution runtime. Manages parallel
+    asynchronous threads on GPU: streaming ingestion, continuous Hamiltonian
+    tracking, Noether symmetry search, and periodic consolidation sleep cycles.
+  - Class & Signatures:
+      - class EpistemicContinuousOrchestrator:
+          - __init__(config: EngineConfig)
+          - start_epistemic_runtime(): Boots parallel non-blocking execution
+            loops.
+          - inject_user_intervention(intervention_packet: Dict[str, Any]):
+            Applies real-time phase space perturbation or semantic constraint.
+
+3.20. visualization/phase_space_projector.py
+
+  - Purpose: High-performance CUDA-accelerated projection of the 2d-dimensional
+    symplectic manifold into a dynamic 3D rendering pipeline using
+    symplectic-preserving linear slices and geodesic flow lines.
+  - Class & Signatures:
+      - class SymplecticPhaseProjector:
+          - __init__(spatial_dim: int)
+          - project_to_3d(z_trajectories: torch.Tensor, projection_plane: str =
+            "canonical_canonical") -> np.ndarray:
+              - Returns vertex buffer arrays shape [B, T, 3] for WebGL / OpenGL
+                rendering.
+
+3.21. visualization/lie_orbit_renderer.py
+
+  - Purpose: Generates 3D vector field streamlines representing the 1-parameter
+    Lie group flow lines X_G(z) overlaid on user-observed physical data.
+  - Class & Signatures:
+      - class LieOrbitVisualizer:
+          - generate_streamlines(invariant_fn: Callable[[torch.Tensor],
+            torch.Tensor], bounds: Tuple[float, float], grid_res: int = 32) ->
+            Dict[str, np.ndarray]
+
+3.22. visualization/interactive_canvas_bridge.py
+
+  - Purpose: WebSocket/WebRTC streaming server pushing phase-space orbits, Lie
+    vector fields, AST graphs, and interactive perturbation handles to a browser
+    UI at 60 FPS.
+  - Class & Signatures:
+      - class InteractiveCanvasServer:
+          - __init__(port: int = 8080)
+          - broadcast_phase_frame(frame_data: Dict[str, Any])
+          - on_user_interaction(callback: Callable[[Dict[str, Any]], None])
+
+4. FORMAL TEST SUITE SPECIFICATION (tests/)
+
+4.1. tests/test_symplectic_invariance.py
+
+  - Verification Scope: Validates that ImplicitMidpointIntegrator and
+    Yoshida4thIntegrator satisfy the symplectomorphism condition over
+    a 50,000-step continuous integration:
+    \max_{k \in [0, 50000]} \left\| \left( \frac{\partial \Phi_{k\Delta t}}{\partial z} \right)^T J \left( \frac{\partial \Phi_{k\Delta t}}{\partial z} \right) - J \right\|_F < 10^{-6}
+  - Physical Target: Chaotic Double Pendulum and Henon-Heiles non-integrable
+    system.
+
+4.2. tests/test_poisson_conservation.py
+
+  - Verification Scope: Verifies that the autodiff Poisson bracket evaluator
+    SymplecticManifold.poisson_bracket produces exact theoretical values:
+      - For q_i, p_j: \{q_i, p_j\} = \delta_{ij}, \{q_i, q_j\} = 0,
+        \{p_i, p_j\} = 0.
+      - For angular momentum L = q_1 p_2 - q_2 p_1 and
+        H = \frac{1}{2}(p_1^2 + p_2^2) + V(\sqrt{q_1^2 + q_2^2}):
+        \{L, H\} \equiv 0 with machine precision error < 10^{-7}.
+
+4.3. tests/test_noether_crystallization.py
+
+  - Verification Scope: End-to-end extraction and AST synthesis test.
+  - Input Data: Raw trajectory data from a 3D isotropic central force field:
+    H_{\text{true}}(q, p) = \frac{1}{2}\|p\|^2 + \frac{1}{2} k \|q\|^2
+  - Success Assertion:
+    1.  LieSymmetryMiner converges to a candidate with
+        \{Q_\phi, H_\theta\}^2 < 10^{-5}.
+    2.  ParetoSymbolicCompiler parses Q_\phi and returns analytical AST
+        structurally identical to components of angular momentum
+        L_z = q_x p_y - q_y p_x with R^2 \ge 0.9999.
+    3.  Description length \mathcal{K}(T) occupies the global Pareto minimum.
+
+4.4. tests/test_continual_learning_orthogonality.py
+
+  - Verification Scope: Validates that SymplecticSubspaceProtector prevents
+    catastrophic forgetting.
+  - Procedure:
+    1.  Train H_\theta on Kepler System (Gravitational Potential \propto 1/r).
+        Crystallize Runge-Lenz invariant A_x.
+    2.  Protect A_x via register_invariant.
+    3.  Train H_\theta continuously on an Anharmonic Quartic Oscillator
+        (V(q) = \lambda q^4).
+  - Success Assertion: Verify that after Step 3, the evaluation of the Kepler
+    invariant on Kepler test data maintains: \frac{\Delta A_x}{A_x} < 10^{-4}
+    proving the model assimilated the new physical regime without degrading the
+    conserved structure of the earlier system.
+
+5. HARDWARE EXECUTION & RESOURCE BUDGET
+
+| Component             | Target Allocation (Workstation / Single GPU)                                                                                                       |
+| :-------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **GPU Target**        | 1x NVIDIA RTX 3060 / 4070 / 4090 (8 GB - 24 GB VRAM)                                                                                               |
+| **Precision Dtype**   | `torch.float32` (Computation) / `torch.float64` (Symplectic Verification)                                                                          |
+| **Active Parameters** | $H_\theta \approx 35\text{k}$, $Q_\phi \approx 18\text{k}$, Transport Bridge $\approx 120\text{k}$ (Total $< 200\text{k}$ parameters)              |
+| **VRAM Footprint**    | Streaming buffer: \~350 MB; Network weights + CUDA Graphs: \~450 MB; Foundation Embedding Bridge cache: \~1.2 GB. **Total VRAM $< 2.5\text{ GB}$** |
+| **Throughput Target** | $\ge 120$ continuous trajectory updates/sec; Real-time visual pipeline: 60 FPS                                                                     |
+
+6. END-TO-END EXECUTION LIFECYCLE (THE AUTONOMOUS LOOP)
+
+[Continuous Live Sensor Stream: q_obs]
+               │
+               ▼
+[Online Symplectic Filter: State Estimation z(t) = (q, p)]
+               │
+               ▼
+┌─────────────────────────────────────────────────────────────┐
+│ GPU Execution Ring                                          │
+│ 1. Evaluate Hamiltonian Vector Field: X_H = J @ ∇H(z)        │
+│ 2. Symplectic Integrator update: z_{t+1} = Midpoint(z_t)    │
+│ 3. Evaluate Noether Miner: L_Noether = {Q_phi, H}^2         │
+│ 4. Subspace-Protected Backward Pass: θ = θ - η P_null ∇L     │
+└──────────────┬──────────────────────────────┬───────────────┘
+               │                              │
+     If {Q, H}^2 < 1e-4                       │ Stream Phase Vertices
+               ▼                              ▼
+[Pareto AST Compiler (MDL)]      [Interactive Canvas Bridge: 60 FPS]
+• Synthesize Analytic Node                    │
+• Register to Grammar                         ▼
+               │                [User Visual Inspection & Steering]
+               ▼                              │
+[Semantic Transport Bridge] ◄─────────────────┘
+• Map Invariant to Foundation Embedding
+• Output Natural Language Physical Discovery
+
+1.  Streaming Assimilation: Live data feeds continuously into
+    OnlineSymplecticStateFilter, which reconstructs canonical conjugate momentum
+    p from generalized positions q, populating a GPU circular phase buffer.
+2.  Symplectic Vector Field Alignment: HamiltonianNN continuously adapts
+    H_\theta(z), minimizing deviation between analytical velocity
+    J \nabla H_\theta(z) and numerically integrated symplectic steps.
+3.  Continuous Noether Sweep: LieSymmetryMiner continuously updates Q_\phi(z),
+    executing gradient steps along the parameter manifold to minimize the
+    squared Poisson commutator \{Q_\phi, H_\theta\}^2.
+4.  Autonomous Crystallization: When an invariant satisfies verified
+    conservation (\frac{dQ}{dt} \approx 0), ParetoSymbolicCompiler triggers. It
+    executes Pareto-beam search, extracting the exact analytical expression.
+5.  Tool Autogenesis: The synthesized expression is compiled into a native AST
+    operator token and registered into DynamicOperatorRegistry, instantly
+    expanding the vocabulary for subsequent discoveries.
+6.  Semantic Grounding & Explanation: The analytical operator is projected into
+    FoundationEmbeddingBridge. The system looks up related scientific literature
+    clusters, forms analogies, and streams natural language physical proofs and
+    interactive LaTeX equations to InteractiveCanvasServer.
+7.  Interactive Steering: A human user observing the visual canvas drags a
+    phase-space streamline or enters a natural-language constraint. The
+    constraint is transformed into a geometric projection matrix via
+    BidirectionalTranslator, instantly pruning search trajectories on the GPU in
+    real time.
+
+================================================================================
+FILE: docs/VALIDATED_VERSIONS.txt
+SHA256: 649d4ca577038f6433631cb2483a40ebf0717b1c72be836e07e48987f7bab50e
+================================================================================
+# Versions used for local validation (CPU). Not a cross-platform lockfile.
+torch==2.15.0+cpu
+numpy==2.5.4
+websockets==16.1.1
+pytest==9.2.0
+pytest-asyncio==1.4.1.post1
+build==1.6.1
+ruff==0.17.4
+setuptools==78.1.0
+
+================================================================================
+FILE: docs/VALIDATION.md
+SHA256: d4a14b306a334c9f337a3791c9b668db4d88177fe4b293d2441ac214a334e83f
+================================================================================
+# Escopo científico e validação
+
+## Contratos implementados
+
+| Área | Implementação | Verificação |
+|---|---|---|
+| Geometria canônica | J como buffer, campos Hamiltonianos, Poisson autodiff, teste de simpléticidade | Colchetes canônicos d=1,2,3, potencial central, Jacobianos não lineares |
+| Integração | Midpoint implícito diferenciável com falha explícita de convergência; Yoshida separável | Reversibilidade, mapas tangentes cumulativos, erro de estrutura |
+| Álgebra de Lie | JVPs, mínimos quadrados de constantes, derivada de Lie da métrica | Translação/dilatação e campo rotacional de Killing |
+| Modelos H/L | MLPs suaves, resíduos dinâmicos, Hessiana Euler–Lagrange | Aprendizado com redução de loss, aceleração analítica e gradientes de parâmetros |
+| Memória | Sensibilidades de invariantes e projeção sem matriz P×P | Resíduo nulo sem damping e redução com damping, inclusive vínculos dependentes |
+| Noether | Objetivo com comutador, variância e ortogonalidade | Gradientes finitos e redução de objetivo; não se afirma convergência única |
+| Conservação | Máximo drift relativo e limite Hoeffding separado para falhas IID | Rejeição de drift/NaN; demonstração conservativa |
+| Topologia | Seção de Poincaré interpolada, dimensão de correlação e métrica pullback | Órbita circular e fluxo linear |
+| Síntese | AST segura sem eval, busca limitada, ajuste quadrático, fronteira de complexidade/erro, registro dinâmico | Lz exato, R² em dados separados, aridade e registro |
+| Semântica | Adaptador de modelo opcional, projeção InfoNCE, vocabulário explícito xy | Backend injetado, backward contrastivo, gerador canônico |
+| Streaming | Buffer limitado, diferenças finitas/EMA, runtime cancelável, replay e intervenções | Aprendizado altera pesos, fila, cancelamento, filtro |
+| Visualização | Slice 3D, órbitas de geradores, WebSocket e canvas | Geometria gerada, roundtrip real, inspeção automatizada do navegador |
+
+## Correções e limites da especificação
+
+1. Simpléticidade não significa conservação exata da energia nem estabilidade por tempo infinito. Há erro de discretização, arredondamento e convergência; o midpoint ajusta sua tolerância mínima à precisão do tensor. Os testes usam float64. Verificações em um estado inicial de baixa energia não provam todos os regimes caóticos.
+2. O pêndulo duplo canônico não tem Hamiltoniano separável `T(p)+V(q)`. Ele é validado com midpoint; executar Yoshida separável nesse modelo seria matematicamente incorreto. O teste Yoshida de 50.000 passos usa Hénon–Heiles. Os testes mantêm o mapa tangente cumulativo, sem confundi-lo com Jacobianos isolados.
+3. O objetivo Noether tem vários mínimos e degenerações. O teste de aprendizado exige redução mensurável, não finge que a otimização tem uma solução única Lz. O teste de cristalização recebe o Lz analítico como alvo. A descoberta neural irrestrita solicitada permanece uma meta de pesquisa não demonstrada.
+4. A penalização de variância não garante não trivialidade nem independência funcional. Um invariante varia entre órbitas, mas é constante numa órbita individual. O runtime conserva um buffer de uma sequência e pode corretamente não produzir nenhuma descoberta. Pontos intercalados de uma mesma trajetória não são amostras IID nem comprovam generalização física. A saída é um candidato empírico.
+5. A projeção em parâmetros é Euclidiana; não há forma simplética canônica dada sobre os pesos. Com damping positivo ela não é uma projeção ortogonal exata. Mesmo sem damping a restrição é apenas local e de primeira ordem; médias de sensibilidades podem cancelar e a base fica desatualizada. Não se comprovou retenção de Runge–Lenz após aprender um sistema quártico. Os testes não substituem esse experimento por uma alegação equivalente.
+6. A busca simbólica é finita e pode não alcançar o R² solicitado; o chamador deve verificar fidelidade. A fronteira é calculada sobre candidatos visitados e usa contagem de nós como proxy de descrição, não um mínimo global de Kolmogorov. Ajustes polinomiais precisam de domínios suficientemente informativos. Operações fora do domínio real são descartadas sem mudar a fórmula.
+7. Uma seção genérica de Poincaré não possui automaticamente coordenadas intrínsecas: por padrão retornam-se interseções em 2d; `chart_fn` fornece o mapa para 2d−1. A estimativa de dimensão é finita e depende das escalas e da amostragem; não demonstra existência de atratores dissipativos em sistemas Hamiltonianos.
+8. Projeção contrastiva entre espaços de dimensões diferentes não é um difeomorfismo. Não se implementa um solver Gromov–Wasserstein nem recuperação automática de literatura. Embeddings sem treinamento pareado não identificam conceitos físicos por si sós.
+9. Projeção para dimensão 3 é exclusivamente visual. Não existe forma simplética não degenerada em dimensão ímpar.
+10. O filtro `p≈m dq/dt` pressupõe massa constante, coordenadas calibradas e intervalos uniformes. Não é um filtro canônico universal, especialmente no pêndulo duplo. A primeira amostra não entra no treinamento, pois não possui estimativa de velocidade.
+11. Não há benchmark RTX, validação CUDA, captura de câmera real, modelo fundacional remoto, WebRTC, provas físicas, autenticação multiusuário ou SLA de produção nesta entrega. O canvas redesenha até a taxa do navegador e o servidor limita envio a 60 Hz; isso não comprova 60 FPS ou 120 atualizações/s. Os parâmetros e recursos dependem de dimensões/modelos escolhidos, não são tratados como orçamento garantido.
+12. A configuração padrão serve a CPU. As redes especificadas somam mais parâmetros do que os números indicados no orçamento do anexo; o código prioriza as assinaturas e dimensões solicitadas, sem alegar que respeita o total estimado de 200 mil.
+
+## Reprodução das evidências
+
+Execute os comandos do README. A suíte normal marca explicitamente os três testes longos como ignorados se `--long` estiver ausente. `pytest --long -m long` executa 150.000 passos no total. A CI padrão executa a suíte rápida, lint, demonstração, empacotamento e comparação byte a byte do TXT; os testes longos podem ser executados separadamente.
+
+A aplicação de referência e as integrações opcionais têm estados de validação diferentes. Nenhum teste com backend semântico injetado deve ser interpretado como teste de um modelo fundacional baixado.
+
+================================================================================
+FILE: pyproject.toml
+SHA256: 3a5b3c2c0902c3e5eca07cb649fa3a76c3ef16167eae4799a6f9fe6c96f4dc67
+================================================================================
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cnge-engine"
+version = "0.1.0"
+description = "Continuous Neuro-Geometric Epistemic Engine"
+requires-python = ">=3.11"
+dependencies = ["torch>=2.5,<3", "numpy>=2,<3", "websockets>=14,<17"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "build>=1,<2", "ruff>=0.11,<1"]
+semantic = ["sentence-transformers>=3,<6"]
+camera = ["opencv-python-headless>=4.10,<5"]
+
+[project.scripts]
+cnge-demo = "cnge_engine.demo:main"
+
+[tool.setuptools.packages.find]
+include = ["cnge_engine*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["long: 50000-step scientific validation"]
+
+[tool.ruff]
+line-length = 100
+
+================================================================================
+FILE: tests/conftest.py
+SHA256: b9f47fd0ae3acc7e24efa7926191a47764d91d5918555763d696200de2fe92ae
+================================================================================
+import pytest
+import torch
+
+
+def pytest_addoption(parser):
+    parser.addoption("--long", action="store_true", help="run 50,000-step validations")
+
+
+def pytest_collection_modifyitems(config, items):
+    if config.getoption("--long"):
+        return
+    for item in items:
+        if "long" in item.keywords:
+            item.add_marker(pytest.mark.skip(reason="use --long for 50,000-step validation"))
+
+
+@pytest.fixture(autouse=True)
+def reproducible():
+    torch.manual_seed(17)
+    torch.set_num_threads(1)
+
+================================================================================
+FILE: tests/test_continual_learning_orthogonality.py
+SHA256: bf74ade348733d0658387c105f57e0ff503798d44c1ef91f9ae614bf874aa6db
+================================================================================
+import torch
+
+from cnge_engine.dynamics.hamiltonian_nn import HamiltonianNN
+from cnge_engine.dynamics.lagrangian_nn import LagrangianNN
+from cnge_engine.dynamics.stability_memory import SymplecticSubspaceProtector
+from cnge_engine.math_core.symplectic import SymplecticManifold
+
+
+def test_exact_and_damped_projection_with_dependent_constraints():
+    gradient = torch.randn(20, dtype=torch.float64)
+    A = torch.randn(3, 20, dtype=torch.float64)
+    A[2] = A[0]
+    exact = SymplecticSubspaceProtector(20, damping=0)
+    exact.rows = list(A)
+    projected = exact.project_gradient(gradient)
+    assert (A @ projected).abs().max() < 1e-12
+    torch.testing.assert_close(exact.project_gradient(projected), projected)
+    damped = SymplecticSubspaceProtector(20)
+    damped.rows = list(A)
+    assert torch.linalg.norm(A @ damped.project_gradient(gradient)) < torch.linalg.norm(
+        A @ gradient
+    )
+
+
+def test_invariant_registration_sensitivity():
+    m = SymplecticManifold(2, dtype=torch.float64)
+    H = HamiltonianNN(m, (8,))
+    protector = SymplecticSubspaceProtector(sum(p.numel() for p in H.parameters()), damping=0)
+    Q = lambda z: z[:, :1] * z[:, 3:4] - z[:, 1:2] * z[:, 2:3]
+    protector.register_invariant(Q, H, torch.randn(32, 4, dtype=torch.float64))
+    assert len(protector.rows) == 1
+    g = torch.randn(protector.parameter_dim, dtype=torch.float64)
+    assert (protector.rows[0] @ protector.project_gradient(g)).abs() < 1e-12
+
+
+def test_hamiltonian_learning_backpropagates():
+    m = SymplecticManifold(1, dtype=torch.float64)
+    H = HamiltonianNN(m, (16,))
+    z = torch.randn(64, 2, dtype=torch.float64)
+    dt = 0.01
+    field = z @ m.J.T
+    pairs = torch.stack((z - dt * field / 2, z + dt * field / 2), 1)
+    optimizer = torch.optim.Adam(H.parameters(), lr=0.01)
+    initial = float(H.trajectory_loss(pairs, dt).detach())
+    for _ in range(60):
+        optimizer.zero_grad()
+        loss = H.trajectory_loss(pairs, dt)
+        loss.backward()
+        optimizer.step()
+    assert float(H.trajectory_loss(pairs, dt).detach()) < initial * 0.5
+    H.eval()
+    with torch.no_grad():
+        assert H.predict_vector_field(z).shape == z.shape
+
+
+def test_lagrangian_acceleration_and_parameter_gradients():
+    class Oscillator(LagrangianNN):
+        def forward(self, q, q_dot):
+            return (q_dot.square() - q.square()).sum(-1, keepdim=True) / 2
+
+    q = torch.randn(4, 2, dtype=torch.float64)
+    v = torch.randn_like(q)
+    torch.testing.assert_close(Oscillator(2).compute_acceleration(q, v), -q)
+    learned = LagrangianNN(2, (8,)).double()
+    a = learned.compute_acceleration(q, v)
+    a.square().sum().backward()
+    assert any(p.grad is not None and p.grad.abs().max() > 0 for p in learned.parameters())
+
+================================================================================
+FILE: tests/test_noether_crystallization.py
+SHA256: dec3f4db5290ea4df802df5b8d00a65add9ddc3087fac1792f6ae0333c98f544
+================================================================================
+import numpy as np
+import pytest
+import torch
+
+from cnge_engine.crystallization.ast_grammar import ASTGrammar, ASTNode
+from cnge_engine.crystallization.dynamic_operator_registry import DynamicOperatorRegistry
+from cnge_engine.crystallization.pareto_compiler import ParetoSymbolicCompiler
+from cnge_engine.demo import run_demo
+from cnge_engine.math_core.symplectic import SymplecticManifold
+from cnge_engine.noether.conservation_verifier import ConservationVerifier
+from cnge_engine.noether.symmetry_miner import LieSymmetryMiner
+
+
+def test_reference_crystallization_end_to_end():
+    report = run_demo(1000)
+    assert report["conserved"]
+    assert report["heldout_r2"] >= 0.9999
+    assert report["operator_count"] == 1
+    assert "z_{0}" in report["latex"]
+
+
+def test_compiler_angular_momentum_structure_and_registry():
+    z = np.random.default_rng(1).normal(size=(200, 6))
+    grammar = ASTGrammar(6)
+    compiler = ParetoSymbolicCompiler(grammar)
+    target = lambda x: x[:, 0] * x[:, 4] - x[:, 1] * x[:, 3]
+    result = compiler.compile(target, z)
+    expected = ASTNode(
+        "-",
+        (
+            ASTNode("*", (ASTNode("var", value=0), ASTNode("var", value=4))),
+            ASTNode("*", (ASTNode("var", value=1), ASTNode("var", value=3))),
+        ),
+    )
+    assert result == expected
+    registry = DynamicOperatorRegistry(grammar)
+    registry.register_crystallized_invariant(result, "L_z")
+    assert registry.get_active_grammar().registered["L_z"].complexity() == 7
+    assert all(
+        not (a.node.complexity() <= b.node.complexity() and a.mse <= b.mse)
+        for a, b in zip(compiler.frontier, compiler.frontier[1:])
+    )
+    with pytest.raises(ValueError):
+        registry.register_crystallized_invariant(ASTNode("const", value=1.0), "L_z")
+
+
+@pytest.mark.parametrize("operation", ["sin", "cos", "exp", "ln", "square", "sqrt"])
+def test_grammar_unary(operation):
+    values = np.array([[0.2], [0.5]])
+    node = ASTNode(operation, (ASTNode("var", value=0),))
+    assert np.isfinite(node.evaluate(values)).all()
+    assert node.to_latex()
+    assert node.complexity() == 2
+
+
+def test_miner_gradients_and_loss_reduction():
+    m = SymplecticManifold(2, dtype=torch.float64)
+    miner = LieSymmetryMiner(m, (16, 16))
+    H = lambda z: z.square().sum(-1, keepdim=True) / 2
+    z = torch.randn(64, 4, dtype=torch.float64)
+    optimizer = torch.optim.Adam(miner.parameters(), lr=0.003)
+    initial = float(miner.compute_loss(z, H)[0].detach())
+    for _ in range(60):
+        optimizer.zero_grad()
+        loss, metrics = miner.compute_loss(z, H)
+        loss.backward()
+        assert all(torch.isfinite(p.grad).all() for p in miner.parameters())
+        optimizer.step()
+    assert float(miner.compute_loss(z, H)[0].detach()) < initial
+    assert metrics["commutator"] >= 0
+
+
+def test_verifier_rejects_drift_and_nonfinite():
+    m = SymplecticManifold(1)
+    verifier = ConservationVerifier(m)
+    trajectory = torch.tensor([[[1.0, 0.0], [2.0, 0.0]]])
+    assert not verifier.verify_trajectory_invariance(lambda z: z[:, :1], trajectory)[0]
+    assert not verifier.verify_trajectory_invariance(lambda z: z[:, :1] * float("nan"), trajectory)[
+        0
+    ]
+    assert verifier.bounded_failure_upper_bound(0, 1000) < 0.1
+
+
+def test_symbolic_nonlinear_search_and_invalid_domains():
+    domain = np.linspace(0.1, 2.0, 128)[:, None]
+    compiler = ParetoSymbolicCompiler(ASTGrammar(1), max_depth=3, beam_width=16)
+    result = compiler.compile(lambda x: np.sin(x[:, 0]), domain)
+    np.testing.assert_allclose(result.evaluate(domain), np.sin(domain[:, 0]), atol=1e-10)
+    invalid = ASTNode("ln", (ASTNode("const", value=-1.0),))
+    assert not np.isfinite(invalid.evaluate(domain)).any()
+    with pytest.raises(ValueError, match="target"):
+        compiler.compile(lambda x: np.full(len(x), np.nan), domain)
+    with pytest.raises(ValueError, match="arity"):
+        ASTNode("exec", ())
+
+================================================================================
+FILE: tests/test_poisson_conservation.py
+SHA256: 5ec7f6b2e7bed624a89e45fe2574f530f9671dd18a3260a4555c656d1e53e1fa
+================================================================================
+import pytest
+import torch
+
+from cnge_engine.math_core.lie_algebra import LieAlgebraEngine
+from cnge_engine.math_core.symplectic import SymplecticManifold
+
+
+@pytest.mark.parametrize("d", [1, 2, 3])
+def test_canonical_poisson_and_matrix(d):
+    m = SymplecticManifold(d, dtype=torch.float64)
+    z = torch.randn(12, 2 * d, dtype=torch.float64, requires_grad=True)
+    assert torch.equal(m.J.T, -m.J)
+    assert torch.equal(m.J @ m.J, -torch.eye(2 * d, dtype=z.dtype))
+    for i in range(2 * d):
+        for j in range(2 * d):
+            actual = m.poisson_bracket(z[:, i : i + 1], z[:, j : j + 1], z)
+            torch.testing.assert_close(actual, m.J[i, j].expand_as(actual))
+    torch.testing.assert_close(
+        m.poisson_bracket(torch.ones(12, 1), z[:, :1], z), torch.zeros(12, 1, dtype=z.dtype)
+    )
+
+
+def test_central_force_angular_momentum():
+    m = SymplecticManifold(2, dtype=torch.float64)
+    z = torch.randn(128, 4, dtype=torch.float64, requires_grad=True)
+    q, p = z.chunk(2, -1)
+    H = p.square().sum(-1, keepdim=True) / 2 + q.square().sum(-1, keepdim=True).square()
+    L = z[:, :1] * z[:, 3:4] - z[:, 1:2] * z[:, 2:3]
+    assert m.poisson_bracket(L, H, z).abs().max() < 1e-12
+
+
+def test_lie_bracket_structure_and_killing():
+    engine = LieAlgebraEngine()
+    z = torch.randn(24, 2, dtype=torch.float64)
+    translation = lambda x: torch.ones_like(x)
+    dilation = lambda x: x
+    torch.testing.assert_close(
+        engine.lie_bracket_fields(translation, dilation, z), torch.ones_like(z)
+    )
+    constants = engine.structure_constants([translation, dilation], z)
+    assert abs(constants[0, 1, 0] - 1) < 1e-12
+    rotation = lambda x: torch.stack((-x[:, 1], x[:, 0]), -1)
+    metric = lambda x: torch.eye(2, dtype=x.dtype).expand(len(x), 2, 2)
+    assert engine.killing_residual(rotation, metric, z).abs().max() == 0
+
+================================================================================
+FILE: tests/test_streaming_and_bridges.py
+SHA256: 38714fb706698845bbf0a0de19121ea58ab841b3d85d01aff55d14693f2b4e89
+================================================================================
+import asyncio
+import json
+
+import numpy as np
+import pytest
+import torch
+from websockets.asyncio.client import connect
+
+from cnge_engine import EngineConfig, SymplecticManifold
+from cnge_engine.crystallization.ast_grammar import ASTGrammar, ASTNode
+from cnge_engine.crystallization.dynamic_operator_registry import DynamicOperatorRegistry
+from cnge_engine.crystallization.topology_analyzer import PhaseTopologyAnalyzer
+from cnge_engine.semantic_bridge.bidirectional_translator import BidirectionalTranslator
+from cnge_engine.semantic_bridge.foundation_embedding import FoundationEmbeddingBridge
+from cnge_engine.semantic_bridge.manifold_transport import ManifoldOptimalTransportBridge
+from cnge_engine.streaming.asynchronous_orchestrator import EpistemicContinuousOrchestrator
+from cnge_engine.streaming.camera_sensor_feed import ContinuousSensorStream
+from cnge_engine.streaming.online_symplectic_filter import OnlineSymplecticStateFilter
+from cnge_engine.visualization.interactive_canvas_bridge import InteractiveCanvasServer
+from cnge_engine.visualization.lie_orbit_renderer import LieOrbitVisualizer
+from cnge_engine.visualization.phase_space_projector import SymplecticPhaseProjector
+
+
+def test_filter_stream_and_projector():
+    stream = ContinuousSensorStream("telemetry", capacity=3)
+    filt = OnlineSymplecticStateFilter(2, 0.1, mass=2)
+    for i in range(5):
+        stream.push([i, 2 * i])
+        state = filt.update_and_extract_phase_point(torch.tensor([[i, 2 * i]], dtype=torch.float64))
+    assert stream.get_state_buffer(3).shape == (3, 2)
+    torch.testing.assert_close(state[:, 2:], torch.tensor([[20.0, 40.0]], dtype=torch.float64))
+    assert SymplecticPhaseProjector(2).project_to_3d(state[:, None]).shape == (1, 1, 3)
+    with pytest.raises(ValueError):
+        filt.update_and_extract_phase_point(torch.ones(2, 2))
+
+
+def test_poincare_correlation_and_metric():
+    m = SymplecticManifold(1, dtype=torch.float64)
+    analyzer = PhaseTopologyAnalyzer(m)
+    t = torch.linspace(0, 12 * torch.pi, 1000, dtype=torch.float64)
+    trajectory = torch.stack((torch.sin(t), torch.cos(t)), -1)
+    intersections = analyzer.compute_poincare_map(trajectory, lambda z: z[:, 0], lambda z: z[:, 1:])
+    assert intersections.shape == (5, 1)
+    assert (intersections - 1).abs().max() < 0.001
+    assert 0.8 < analyzer.detect_attractor_dimensionality(trajectory) < 1.3
+    metric = analyzer.pullback_metric(lambda x: 2 * x, trajectory[:2])
+    torch.testing.assert_close(metric, 4 * torch.eye(2, dtype=t.dtype).expand(2, 2, 2))
+
+
+def test_semantic_bridge_with_injected_backend():
+    class Backend:
+        def encode(self, texts, **kwargs):
+            return torch.eye(len(texts), 8)
+
+    embedder = FoundationEmbeddingBridge(backend=Backend())
+    embeddings = embedder.embed_text(["energy", "angular momentum"])
+    assert embeddings.shape == (2, 8)
+    transport = ManifoldOptimalTransportBridge(4, 8)
+    loss = transport.alignment_loss(torch.randn(2, 4), embeddings)
+    loss.backward()
+    assert transport.projection[0].weight.grad.abs().max() > 0
+    registry = DynamicOperatorRegistry(ASTGrammar(4))
+    translator = BidirectionalTranslator(embedder, transport, registry)
+    constraint = translator.prompt_to_geometric_constraint(
+        "Assume rotational symmetry in the xy-plane"
+    )
+    m = SymplecticManifold(2)
+    assert (constraint.generator.T @ m.J + m.J @ constraint.generator).abs().max() == 0
+    assert translator.discovery_to_natural_explanation(ASTNode("var", value=0))["proof"] is None
+    with pytest.raises(ValueError):
+        translator.prompt_to_geometric_constraint("invent an arbitrary force")
+
+
+async def test_websocket_roundtrip_and_cleanup():
+    server = await InteractiveCanvasServer(port=0).start()
+    event = asyncio.Event()
+    packets = []
+
+    def callback(packet):
+        packets.append(packet)
+        event.set()
+
+    server.on_user_interaction(callback)
+    try:
+        async with connect(f"ws://127.0.0.1:{server.port}") as socket:
+            await socket.send(json.dumps({"type": "perturbation", "delta": [1, 0]}))
+            await asyncio.wait_for(event.wait(), 2)
+            assert packets[0]["delta"] == [1, 0]
+            await server.broadcast_phase_frame({"vertices": [[1, 2, 3]]})
+            assert json.loads(await asyncio.wait_for(socket.recv(), 2))["vertices"] == [[1, 2, 3]]
+            await socket.send("invalid json")
+            assert "error" in json.loads(await socket.recv())
+    finally:
+        await server.close()
+    assert not server.clients
+
+
+async def test_runtime_learning_interventions_and_cancellation():
+    config = EngineConfig(
+        spatial_dim=2, dtype=torch.float64, discovery_interval=4, memory_replay_interval_secs=0.001
+    )
+    runtime = EpistemicContinuousOrchestrator(config)
+    before = next(runtime.hamiltonian.parameters()).detach().clone()
+
+    async def source():
+        for i in range(10):
+            yield [np.cos(i * 0.01), np.sin(i * 0.01)]
+
+    task = runtime.start_epistemic_runtime(source())
+    await task
+    assert runtime.updates == 10
+    assert not torch.equal(before, next(runtime.hamiltonian.parameters()))
+    assert np.isfinite(runtime.metrics["dynamics_loss"])
+    runtime.inject_user_intervention({"type": "constraint", "prompt": "rotational symmetry xy"})
+    runtime.inject_user_intervention({"type": "perturbation", "delta": [1, 0, 0, 0]})
+    await runtime.process_observation([1.0, 0.0])
+    assert runtime.rotation_constraint
+
+    async def infinite():
+        while True:
+            yield [1.0, 0.0]
+            await asyncio.sleep(0.01)
+
+    task = runtime.start_epistemic_runtime(infinite())
+    await asyncio.sleep(0.02)
+    await runtime.stop()
+    assert task.done()
+
+
+def test_orbit_generator():
+    m = SymplecticManifold(1, dtype=torch.float64)
+    result = LieOrbitVisualizer(m, steps=4).generate_streamlines(
+        lambda z: z.square().sum(-1, keepdim=True) / 2, (-1, 1), grid_res=4
+    )
+    assert result["vertices"].shape == (16, 5, 3)
+    assert np.isfinite(result["vertices"]).all()
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"spatial_dim": 0},
+        {"integrator_dt": -1},
+        {"dtype": torch.int64},
+        {"integrator_type": "euler"},
+    ],
+)
+def test_invalid_config(kwargs):
+    with pytest.raises(ValueError):
+        EngineConfig(**kwargs)
+
+
+async def test_runtime_yoshida_and_error_propagation():
+    with pytest.raises(ValueError, match="separable"):
+        EpistemicContinuousOrchestrator(EngineConfig(integrator_type="yoshida4"))
+    engine = EpistemicContinuousOrchestrator(
+        EngineConfig(spatial_dim=1, integrator_type="yoshida4"),
+        separable_gradients=(lambda q: q, lambda p: p),
+    )
+    await engine.process_observation([1.0])
+    result = await engine.process_observation([0.99995])
+    assert result.shape == (1, 2)
+
+    async def broken():
+        yield [1.0, 2.0]  # invalid dimension for d=1
+
+    task = engine.start_epistemic_runtime(broken())
+    with pytest.raises(ValueError, match="sensor observation"):
+        await task
+    with pytest.raises(ValueError, match="sensor observation"):
+        await engine.stop()
+
+
+async def test_slow_client_frame_queue_is_bounded():
+    server = InteractiveCanvasServer()
+    queue = asyncio.Queue(maxsize=1)
+    server.clients["fake-client"] = queue
+    for i in range(100):
+        await server.broadcast_phase_frame({"index": i})
+    assert queue.qsize() == 1
+    assert json.loads(queue.get_nowait())["index"] == 99
+
+================================================================================
+FILE: tests/test_symplectic_invariance.py
+SHA256: 112d0d762198838f1f75e61cbd503ca8a0eb62c148ee9fb3974f1a18c62fe8ee
+================================================================================
+import pytest
+import torch
+
+from cnge_engine.math_core.integrators import ImplicitMidpointIntegrator, Yoshida4thIntegrator
+from cnge_engine.math_core.symplectic import SymplecticManifold, scalar_gradient
+
+
+def henon_heiles(z):
+    q, p = z.chunk(2, -1)
+    return (
+        (q.square().sum(-1) + p.square().sum(-1)) / 2
+        + q[..., 0] ** 2 * q[..., 1]
+        - q[..., 1] ** 3 / 3
+    )
+
+
+def double_pendulum(z):
+    # Canonical equal-mass/equal-length double pendulum; velocities are NOT momenta.
+    q, p = z.chunk(2, -1)
+    cosine = torch.cos(q[..., 0] - q[..., 1])
+    kinetic = (p[..., 0] ** 2 + 2 * p[..., 1] ** 2 - 2 * p[..., 0] * p[..., 1] * cosine) / (
+        2 * (2 - cosine**2)
+    )
+    return kinetic - 2 * torch.cos(q[..., 0]) - torch.cos(q[..., 1])
+
+
+@pytest.mark.parametrize("H", [henon_heiles, double_pendulum])
+def test_midpoint_nonlinear_symplectic_jacobian(H):
+    m = SymplecticManifold(2, dtype=torch.float64)
+    z = torch.tensor([[0.1, 0.2, 0.05, -0.1]], dtype=torch.float64, requires_grad=True)
+    field = lambda x: m.hamiltonian_vector_field(scalar_gradient(H(x), x))
+    step = lambda x: ImplicitMidpointIntegrator(max_iters=40, tol=1e-14).step(x, field, 0.01)
+    jac = torch.autograd.functional.jacobian(step, z).reshape(4, 4)
+    assert m.check_symplectomorphism(jac, 1e-10)[0]
+    torch.testing.assert_close(
+        ImplicitMidpointIntegrator(40, 1e-14).step(step(z), field, -0.01), z, atol=1e-12, rtol=1e-12
+    )
+
+
+def test_nonconvergence_and_nonseparable_rejection():
+    with pytest.raises(RuntimeError, match="converge"):
+        ImplicitMidpointIntegrator(2).step(torch.ones(1, 2), lambda z: 100 * z, 1.0)
+    with pytest.raises(ValueError, match="separable"):
+        Yoshida4thIntegrator().step(torch.ones(1, 2), lambda z: z, 0.01)
+
+
+@pytest.mark.parametrize("steps", [200, pytest.param(50000, marks=pytest.mark.long)])
+def test_yoshida_henon_heiles_cumulative_tangent(steps):
+    # Propagate the full tangent map; checking only individual step Jacobians is insufficient.
+    dtype = torch.float64
+    m = SymplecticManifold(2, dtype=dtype)
+    q = torch.tensor([[0.1, 0.0]], dtype=dtype)
+    p = torch.tensor([[0.0, 0.2]], dtype=dtype)
+    tangent = torch.eye(4, dtype=dtype)
+    integrator = Yoshida4thIntegrator()
+
+    def grad_v(q):
+        return torch.stack(
+            (q[..., 0] + 2 * q[..., 0] * q[..., 1], q[..., 1] + q[..., 0] ** 2 - q[..., 1] ** 2), -1
+        )
+
+    def mapping(z):
+        return torch.cat(integrator.step_separable(*z.chunk(2, -1), grad_v, lambda p: p, 0.01), -1)
+
+    z = torch.cat((q, p), -1)
+    maximum = 0.0
+    for _ in range(steps):
+        local = torch.func.jacrev(mapping)(z).reshape(4, 4)
+        tangent = local @ tangent
+        z = mapping(z)
+        error = float(torch.linalg.matrix_norm(tangent.T @ m.J @ tangent - m.J))
+        maximum = max(maximum, error)
+    assert maximum < 1e-6
+
+
+@pytest.mark.parametrize("H", [henon_heiles, double_pendulum])
+@pytest.mark.long
+def test_midpoint_50000_cumulative_tangent(H):
+    m = SymplecticManifold(2, dtype=torch.float64)
+    z = torch.tensor([[0.1, 0.0, 0.0, 0.2]], dtype=torch.float64)
+    tangent = torch.eye(4, dtype=z.dtype)
+    solver = ImplicitMidpointIntegrator(40, 1e-14)
+    field = torch.func.grad(lambda x: H(x).sum())
+
+    def vector(x):
+        return m.hamiltonian_vector_field(field(x))
+
+    for _ in range(50000):
+        next_z = solver.step(z, vector, 0.01).detach()
+        middle = (z + next_z) / 2
+        derivative = torch.func.jacrev(vector)(middle).reshape(4, 4)
+        identity = torch.eye(4, dtype=z.dtype)
+        local = torch.linalg.solve(identity - 0.005 * derivative, identity + 0.005 * derivative)
+        tangent = local @ tangent
+        assert torch.linalg.matrix_norm(tangent.T @ m.J @ tangent - m.J) < 1e-6
+        z = next_z
+
+================================================================================
+FILE: tools/browser_smoke.cjs
+SHA256: c5dfdb6e515f2c3aaed16f518c957c1f74d10c7991d2dcd1539db97d27931f2f
+================================================================================
+/** Local browser smoke test. Start tools/live_demo.py before running. */
+const { chromium } = require('playwright');
+
+(async () => {
+  const browser = await chromium.launch({
+    executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium',
+    headless: true,
+    args: ['--no-sandbox'],
+  });
+  try {
+    const page = await browser.newPage({ viewport: { width: 1200, height: 850 } });
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(process.env.CNGE_TEST_URL || 'http://127.0.0.1:8081');
+    await page.waitForFunction(() => document.querySelector('#status').textContent === 'Ao vivo');
+    await page.waitForFunction(() => document.querySelector('#metrics').textContent.includes('dynamics_loss'));
+    await page.click('#apply');
+    await page.click('#phase', { position: { x: 280, y: 200 } });
+    await page.waitForTimeout(1000);
+    const interactionError = await page.locator('#error').textContent();
+    if (interactionError || errors.length) throw new Error(interactionError || errors.join('; '));
+    await page.setViewportSize({ width: 390, height: 844 });
+    if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) {
+      throw new Error('Mobile layout overflows');
+    }
+    console.log('PASS: live telemetry, interactions, JavaScript and mobile layout');
+  } finally {
+    await browser.close();
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });
+
+================================================================================
+FILE: tools/export_source.py
+SHA256: 5bc443124d1d8066d2031c95fdd7881c6cb85b2407562a6015d7269a346d2d51
+================================================================================
+"""Deterministically concatenate tracked project text files, excluding the export itself."""
+
+import argparse
+import hashlib
+import subprocess
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def export(output):
+    names = subprocess.check_output(["git", "ls-files", "-z"], cwd=ROOT).decode().split("\0")
+    names = sorted(n for n in names if n and n != "CNGE_SOURCE.txt" and (ROOT / n).is_file())
+    chunks = [
+        "CNGE — complete source archive (UTF-8)\n",
+        "Each FILE section contains the original text of one tracked project file.\n",
+    ]
+    for name in names:
+        data = (ROOT / name).read_bytes()
+        text = data.decode("utf-8")
+        chunks.append(
+            f"\n{'=' * 80}\nFILE: {name}\nSHA256: {hashlib.sha256(data).hexdigest()}\n{'=' * 80}\n{text}"
+        )
+        if not text.endswith("\n"):
+            chunks.append("\n")
+    output.write_text("".join(chunks), encoding="utf-8")
+    return len(names)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output", type=Path, default=ROOT / "CNGE_SOURCE.txt")
+    print(f"Exported {export(parser.parse_args().output)} files")
+
+================================================================================
+FILE: tools/live_demo.py
+SHA256: bbab6fcf8d441d21f5e80a69e6c1cbbd82cbca8cd315529c135b8eca6a60c0ef
+================================================================================
+"""Serve the local canvas and a finite or continuous oscillator telemetry simulation."""
+
+import argparse
+import asyncio
+import threading
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+import numpy as np
+
+from cnge_engine import EngineConfig
+from cnge_engine.streaming.asynchronous_orchestrator import EpistemicContinuousOrchestrator
+from cnge_engine.visualization.interactive_canvas_bridge import InteractiveCanvasServer
+
+
+async def run(port=8080, steps=0):
+    canvas = await InteractiveCanvasServer(port).start()
+    runtime = EpistemicContinuousOrchestrator(EngineConfig(spatial_dim=2), canvas=canvas)
+    canvas.on_user_interaction(runtime.inject_user_intervention)
+    web_root = Path(__file__).resolve().parents[1] / "web"
+    http = ThreadingHTTPServer(
+        ("127.0.0.1", port + 1), partial(SimpleHTTPRequestHandler, directory=str(web_root))
+    )
+    thread = threading.Thread(target=http.serve_forever, daemon=True)
+    thread.start()
+    print(f"Canvas HTTP port: {port + 1}; WebSocket port: {port}", flush=True)
+
+    async def source():
+        step = 0
+        while steps == 0 or step < steps:
+            yield [np.cos(step * 0.01), np.sin(step * 0.01)]
+            step += 1
+            await asyncio.sleep(0.01)
+
+    try:
+        await runtime.start_epistemic_runtime(source())
+    finally:
+        await runtime.stop()
+        await canvas.close()
+        await asyncio.to_thread(http.shutdown)
+        http.server_close()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--port", type=int, default=8080)
+    parser.add_argument("--steps", type=int, default=0, help="0 runs until interrupted")
+    args = parser.parse_args()
+    try:
+        asyncio.run(run(args.port, args.steps))
+    except KeyboardInterrupt:
+        pass
+
+================================================================================
+FILE: web/index.html
+SHA256: a4acb8d0b85701c4c48ba6bd86fadb4e7cb9ae260e46dd5d7974e64ea6556eb8
+================================================================================
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CNGE · Espaço de fases</title>
+<style>
+:root{font:16px system-ui;color:#dfeafa;background:#0c1320;color-scheme:dark}body{max-width:1200px;margin:auto;padding:28px}h1{font-weight:550;letter-spacing:.04em}header{display:flex;align-items:center;justify-content:space-between}small{color:#9db0c9}main{display:grid;grid-template-columns:2fr 1fr;gap:24px}canvas{background:#101e31;border:1px solid #29415f;border-radius:12px;width:100%;height:480px}aside{padding:20px;background:#101e31;border-radius:12px}button,input{font:inherit;padding:10px;border:1px solid #3d5c7f;border-radius:6px;margin:5px 0;width:100%;box-sizing:border-box}button{background:#164e65;cursor:pointer}pre{font-size:12px;white-space:pre-wrap}#status{color:#fbbf24}label{font-size:14px}p{line-height:1.5}@media(max-width:760px){main{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header><h1>CNGE <small> / espaço de fases</small></h1><span id="status" role="status">Conectando…</span></header>
+<p>Telemetria do oscilador · projeção visual (q₁, q₂, p₁). Candidatos empíricos exigem validação física.</p>
+<main><section><canvas id="phase" aria-label="Trajetória no espaço de fases"></canvas><p><small>Clique no plano para aplicar uma perturbação em q. A intervenção altera o estado observado, não o sensor de origem.</small></p></section>
+<aside><h2>Intervenções</h2><label for="constraint">Restrição suportada</label><input id="constraint" value="Assume rotational symmetry in the xy-plane"><button id="apply">Aplicar simetria xy</button><button id="clear">Limpar trajetória</button><h2>Métricas</h2><pre id="metrics">Aguardando telemetria…</pre><h2>Descobertas</h2><pre id="discoveries">Nenhum candidato validado.</pre><p id="error" role="alert"></p></aside></main>
+<script>
+'use strict';
+const canvas=document.querySelector('#phase'), ctx=canvas.getContext('2d');
+const status=document.querySelector('#status'), points=[];
+let socket, retry, stopped=false;
+function connect(){
+  const port=Number(location.port)-1;
+  socket=new WebSocket(`ws://${location.hostname}:${port}`);
+  socket.onopen=()=>{status.textContent='Ao vivo';status.style.color='#6ee7b7';};
+  socket.onclose=()=>{status.textContent='Desconectado';status.style.color='#fbbf24';if(!stopped)retry=setTimeout(connect,1500);};
+  socket.onerror=()=>{document.querySelector('#error').textContent='Falha na conexão de telemetria.';};
+  socket.onmessage=event=>{
+    try{
+      const data=JSON.parse(event.data);
+      if(data.error){document.querySelector('#error').textContent=data.error;return;}
+      for(const batch of data.vertices||[])for(const point of batch){if(point.length===3&&point.every(Number.isFinite))points.push(point);}
+      if(points.length>2000)points.splice(0,points.length-2000);
+      document.querySelector('#metrics').textContent=JSON.stringify(data.metrics||{},null,2);
+      document.querySelector('#discoveries').textContent=data.discoveries?.length?JSON.stringify(data.discoveries,null,2):'Nenhum candidato validado.';
+    }catch{document.querySelector('#error').textContent='Mensagem de telemetria inválida.';}
+  };
+}
+function send(packet){if(socket.readyState===WebSocket.OPEN){socket.send(JSON.stringify(packet));document.querySelector('#error').textContent='';}else document.querySelector('#error').textContent='Aguarde a conexão.';}
+document.querySelector('#apply').onclick=()=>send({type:'constraint',prompt:document.querySelector('#constraint').value});
+document.querySelector('#clear').onclick=()=>{points.length=0;};
+canvas.onclick=e=>{const r=canvas.getBoundingClientRect();send({type:'perturbation',delta:[(e.clientX-r.left-r.width/2)/100,-(e.clientY-r.top-r.height/2)/100,0,0]});};
+function render(){
+ const ratio=devicePixelRatio||1,w=canvas.clientWidth,h=canvas.clientHeight;
+ if(canvas.width!==w*ratio||canvas.height!==h*ratio){canvas.width=w*ratio;canvas.height=h*ratio;}
+ ctx.setTransform(ratio,0,0,ratio,0,0);ctx.clearRect(0,0,w,h);
+ ctx.strokeStyle='#29415f';ctx.lineWidth=1;
+ for(let i=-5;i<=5;i++){ctx.beginPath();ctx.moveTo(w/2+i*50,0);ctx.lineTo(w/2+i*50,h);ctx.stroke();ctx.beginPath();ctx.moveTo(0,h/2+i*50);ctx.lineTo(w,h/2+i*50);ctx.stroke();}
+ ctx.strokeStyle='#67e8f9';ctx.lineWidth=2;ctx.beginPath();
+ points.forEach((p,i)=>{const x=w/2+100*(p[0]+.35*p[2]),y=h/2-100*(p[1]+.15*p[2]);if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});ctx.stroke();
+ ctx.fillStyle='#9db0c9';ctx.fillText('q₁ →    q₂ ↑    p₁ ↗',14,24);requestAnimationFrame(render);
+}
+window.addEventListener('beforeunload',()=>{stopped=true;clearTimeout(retry);socket?.close();});connect();render();
+</script>
+</body></html>

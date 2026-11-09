@@ -1,0 +1,1 @@
+"""CNGE noether components."""

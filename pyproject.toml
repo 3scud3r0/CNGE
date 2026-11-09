@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cnge-engine"
+version = "0.1.0"
+description = "Continuous Neuro-Geometric Epistemic Engine"
+requires-python = ">=3.11"
+dependencies = ["torch>=2.5,<3", "numpy>=2,<3", "websockets>=14,<17"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "pytest-asyncio>=0.24,<2", "build>=1,<2", "ruff>=0.11,<1"]
+semantic = ["sentence-transformers>=3,<6"]
+camera = ["opencv-python-headless>=4.10,<5"]
+
+[project.scripts]
+cnge-demo = "cnge_engine.demo:main"
+
+[tool.setuptools.packages.find]
+include = ["cnge_engine*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = ["long: 50000-step scientific validation"]
+
+[tool.ruff]
+line-length = 100
