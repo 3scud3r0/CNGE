@@ -4,3 +4,4 @@ recursive-include tests *.py
 recursive-include tools *.py *.cjs
 recursive-include web *.html
 recursive-include .github *.yml
+recursive-include cnge_v2/verification *.py

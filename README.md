@@ -1,12 +1,12 @@
-# CNGE — Continuous Neuro-Geometric Epistemic Engine
+# CNGE-v2 — Robust continuous geometric discovery
 
-Implementação de referência executável da arquitetura neurogeométrica do anexo, em Python/PyTorch. Inclui os 22 módulos especificados, testes, demonstração científica, runtime de aprendizado online, transporte WebSocket e uma interface de inspeção em canvas.
+O fluxo recomendado agora usa **autoencoder diferencial + EKF**, **gauge escalar normalizado**, **dicionários funcionais + STLSQ** e **adaptadores LoRA com proteção de ativações ou roteamento por tarefa**. O pacote `cnge_v2/` contém todos os módulos da especificação v2, pipeline, checkpoints, demonstração e testes.
 
-**Estado:** pesquisa/desenvolvimento. As metas de descoberta autônoma geral, retenção perfeita, prova física, desempenho GPU e operação de produção ainda não estão demonstradas. Consulte [limites e correspondência com o pedido](docs/VALIDATION.md).
+As fórmulas do pedido exigiram correções: `uᵀJu=0` não define uma norma, imagens de posição isoladas não identificam momento e subespaços finitos podem saturar. [Contratos, demonstrações e limites](docs/V2_VALIDATION.md) explicam exatamente o que o código garante e o que foi medido. O estado é pesquisa/desenvolvimento validado em CPU, sem alegar garantias universais de produção ou descoberta científica.
 
-## Instalação
+## Instalar
 
-Python 3.11+ (validado localmente com Python 3.12). CPU não requer GPU, câmera, serviços externos ou credenciais:
+Python 3.11+ (validação local: Python 3.12). Use o checkout existente: cada tarefa cloud já é isolada, sem necessidade de worktree.
 
 ```bash
 cd /workspace/CNGE
@@ -16,76 +16,75 @@ python -m venv .venv
 .venv/bin/python -m pip check
 ```
 
-Em uma máquina CUDA, instale primeiro a distribuição de PyTorch adequada ao driver usando as instruções oficiais do PyTorch, e selecione `EngineConfig(device="cuda")`. Não presuma disponibilidade de GPU. Cada tarefa cloud já é isolada: use o checkout existente, sem criar worktrees.
+O PyTorch CPU está explícito para evitar baixar distribuições CUDA sem necessidade. Para GPU, instale o PyTorch adequado ao driver conforme a documentação oficial e configure `device="cuda"`. Nenhum serviço externo ou segredo é necessário para o v2.
 
-## Executar e verificar
+## Executar e validar
 
 ```bash
-.venv/bin/cnge-demo --steps 1000 --output artifacts/demo.json
-.venv/bin/pytest -q
-.venv/bin/pytest --long -m long -q  # três testes de 50.000 passos; cerca de 14 minutos nesta CPU
-.venv/bin/ruff check cnge_engine tests tools
-.venv/bin/ruff format --check cnge_engine tests tools
+OPENBLAS_NUM_THREADS=1 .venv/bin/python -m cnge_v2.demo --output artifacts/v2-demo.json
+OPENBLAS_NUM_THREADS=1 .venv/bin/pytest -q
+.venv/bin/ruff check cnge_engine cnge_v2 tests tools
+.venv/bin/ruff format --check cnge_engine cnge_v2 tests tools
 .venv/bin/python -m build
 ```
 
-A demonstração integra o oscilador harmônico isotrópico 3D, verifica um invariante analítico conhecido, sintetiza `L_z = q_x p_y - q_y p_x`, verifica a expressão em pontos separados e a registra na gramática. O relatório distingue esse exercício de uma descoberta neural autônoma.
+Após instalação, `cnge-v2-demo` é equivalente ao módulo. A demonstração calibra coordenadas em telemetria ruidosa, executa ingestão → EKF → atualização LoRA → mineração e, separadamente, destila Runge–Lenz em cinco termos. Não apresenta o alvo analítico como uma descoberta neural autônoma.
 
-## Interface e aprendizado online
+A suíte normal inclui testes do v1 e v2. Três testes históricos de 50.000 passos exigem `pytest --long -m long -q`; a execução anterior levou cerca de 14 minutos. O v2 compartilha o mesmo midpoint validado, sem fallback Euler/RK4. [Resultados atuais](docs/V2_RESULTS.md) distinguem verificações atuais e históricas.
 
-```bash
-.venv/bin/python tools/live_demo.py
-# Execução finita, útil para smoke test:
-.venv/bin/python tools/live_demo.py --steps 100
-```
-
-O processo inicia HTTP na porta 8081 e WebSocket na 8080, ambos em loopback. Para acesso local, abra o arquivo servido pelo HTTP no navegador da mesma máquina. A interface mostra `(q₁,q₂,p₁)`, métricas, candidatos e permite perturbações e restrição rotacional xy. Essa é uma projeção visual, não uma transformação simplética em 3D. Os processos não sobrevivem a snapshots: reinicie o comando quando necessário. `Ctrl+C` fecha o runtime e os servidores. Não exponha esse servidor sem autenticação e uma configuração de implantação própria.
-
-Para outros sensores, forneça um iterador assíncrono de coordenadas `[d]` ao método `start_epistemic_runtime(source)` e aguarde a tarefa retornada. `stop()` cancela e coleta tarefas. A fonte deve ter período uniforme `integrator_dt` e massa constante conhecida para que a aproximação `p = m dq/dt` seja apropriada. Uma mudança de coordenadas observada não necessariamente corresponde a um impulso físico.
+## Usar o pipeline
 
 ```python
 import asyncio
-from cnge_engine import EngineConfig
-from cnge_engine.streaming.asynchronous_orchestrator import EpistemicContinuousOrchestrator
+import torch
+from cnge_v2 import V2EngineConfig
+from cnge_v2.execution.streaming_pipeline import StreamingEpistemicPipeline
 
-async def observations():
-    for q in ([1., 0.], [.99995, .01], [.9998, .02]):
-        yield q
-
-async def main():
-    engine = EpistemicContinuousOrchestrator(EngineConfig(spatial_dim=2))
-    try:
-        await engine.start_epistemic_runtime(observations())
-        print(engine.metrics)
-    finally:
-        await engine.stop()
-
-asyncio.run(main())
+async def run(calibration_pairs, sensor):
+    # calibration_pairs: [B, 2, obs_dim], mesmo sensor e passo temporal do stream.
+    engine = StreamingEpistemicPipeline(V2EngineConfig(
+        obs_dim=calibration_pairs.shape[-1], latent_spatial_dim=2,
+        device="cpu", protection_mode="task",
+    ))
+    engine.calibrate(calibration_pairs, steps=100)
+    async for observation in sensor:
+        telemetry = await engine.ingest_sensor_tick(observation)
+        print(telemetry)
+    engine.save_checkpoint("artifacts/model.pt")
+    restored = StreamingEpistemicPipeline.load_checkpoint("artifacts/model.pt", device="cpu")
+    return restored
 ```
 
-O runtime realiza atualização Hamiltoniana por SGD com gradiente projetado, mineração Noether por Adam, replay periódico, verificação empírica e compilação condicional. A mineração e as operações tensoriais são serializadas numa tarefa cooperativa para evitar corridas nos parâmetros; não se afirma execução concorrente em streams CUDA. A busca simbólica pode bloquear brevemente o loop. Eventos externos têm fila limitada e quadros são descartados em favor do mais recente para clientes lentos.
+Calibre com pares de observações igualmente espaçadas, normalizadas e representativas de várias trajetórias/energias. `Q_cov` e `R_cov` precisam refletir as unidades e o ruído do sensor. O encoder não é adaptado silenciosamente depois da calibração: uma mudança de carta invalidaria as garantias dos snapshots anteriores.
 
-### Integrações opcionais
+Para imagens de posição ou sensores sem estado observável em um frame, forme históricos com `ObservationHistory(frame_dim=128, length=4)` e configure `obs_dim=512`; `update(frame)` retorna `None` até preencher a janela, depois retorna o vetor concatenado. Prepare os pares de calibração com as mesmas janelas. Não se supõe que qualquer histórico arbitrário garanta observabilidade.
 
-- **Embeddings:** `pip install -e '.[semantic]'`. `FoundationEmbeddingBridge` carrega um modelo Sentence Transformers explicitamente; o download requer acesso ao Hugging Face e seus hosts de armazenamento. Não ocorre na importação do pacote. O adaptador foi testado com backend injetado; o modelo remoto não foi baixado. A projeção contrastiva precisa de pares científicos rotulados antes de uso semântico significativo.
-- **Câmera:** `pip install -e '.[camera]'`. `ContinuousSensorStream.capture(coordinate_extractor)` requer um dispositivo e uma função que transforme frames em coordenadas físicas calibradas. O código não interpreta pixels como posições ou inventa calibração.
-- **Semântica:** a tradução de restrições suporta explicitamente rotação no plano xy. Prompts arbitrários são rejeitados; a explicação apresenta a expressão e o estado empírico, sem inventar citações ou provas.
+`LiveOrchestrator(engine, capacity=64, callback=...)` coordena um produtor e um worker com fila limitada, backpressure, cancelamento estruturado e propagação de erros. Aguarde `orchestrator.run(async_source)`. Não compartilhe o modelo com atualizações concorrentes fora desse worker.
 
-## Estrutura
+### Aprendizado contínuo
 
-`cnge_engine/` segue a organização do pedido: `config`, `math_core`, `dynamics`, `noether`, `crystallization`, `semantic_bridge`, `streaming` e `visualization`. Os testes ficam em `tests/`; o frontend em `web/`. O pedido original está preservado em [docs/SPECIFICATION.txt](docs/SPECIFICATION.txt).
+- `protection_mode="activation"` é o padrão: protege a união dos subespaços capturados. Uma camada saturada gera `ActivationCapacityError`; expansão de características ou outra política exige uma decisão explícita.
+- `protection_mode="task"` preserva snapshots nomeados e permite novos adaptadores completos. Após treinar um regime, use `engine.consolidate_task("regime_1")`; para inferência antiga, use `with engine.adapters.task("regime_1"):` ao avaliar energia/campo. Essa política requer contexto de tarefa e não promete proteção incondicional do campo ativo.
+- `trigger_symbolic_distillation()` só consolida quando os gates de variância, comutador, R² separado e residual da fórmula passam. Retorna `None` quando não há evidência. Um sistema genérico com um grau de liberdade pode não ter outro invariante independente de H.
 
-## Código-fonte em um único TXT
+Os checkpoints preservam modelos, adaptadores e estados de otimização; filtros, filas e conexões reiniciam. Não recalibre a carta após congelar tarefas. A restauração de pesos não inicia serviços.
 
-[CNGE_SOURCE.txt](CNGE_SOURCE.txt) reúne todos os arquivos de texto versionados (código, testes, interface, configuração e documentação), com caminho e SHA-256 de cada arquivo. É um arquivo de fontes concatenadas, não um executável binário. Recrie-o após alterar os fontes:
+### Síntese analítica
+
+`FunctionalDictionary` suporta monômios de grau limitado, trigonometria, filtros dimensionais/de escala e orçamento máximo de termos. `include_kepler=True` adiciona `q_i/r`, indispensável para Runge–Lenz. `ConstrainedSTLSQ.fit` aceita `constraints=C` para `C ξ=0`; `fit_gradient` ajusta gradientes de funções escalares, sem criar um campo não integrável. A complexidade é polinomial no tamanho explícito da biblioteca, que deve permanecer limitado.
+
+## Código-fonte e distribuição
+
+[CNGE_SOURCE.txt](CNGE_SOURCE.txt) reúne todo o conteúdo textual versionado, com caminhos e SHA-256: ambos os pacotes, testes, frontend, scripts, configuração e documentação. É um arquivo de fontes concatenadas, não um executável Python isolado. Após editar fontes:
 
 ```bash
 git add .
 .venv/bin/python tools/export_source.py
+git add CNGE_SOURCE.txt
 ```
 
-O exportador exclui a si próprio como **saída** (`CNGE_SOURCE.txt`), mas inclui seu script, e não inclui `.venv`, caches, artefatos ou credenciais. A distribuição Python compilada/empacotada fica em `dist/` após `python -m build`.
+O build produz wheel e distribuição de fontes em `dist/`; esta inclui também ferramentas, interface e o TXT. Caches, ambientes virtuais, artefatos e credenciais não são exportados.
 
-### Teste do navegador
+## Compatibilidade v1
 
-Com o servidor de demonstração ativo, execute `node tools/browser_smoke.cjs` em um ambiente com Playwright e Chromium. Se necessário, instale o cliente com `npm install --prefix /tmp/cnge-browser playwright` e use `NODE_PATH=/tmp/cnge-browser/node_modules node tools/browser_smoke.cjs`. `CHROMIUM_PATH` seleciona o executável Chromium instalado. O teste verifica telemetria real, intervenções, erros JavaScript e layout móvel.
+O código `cnge_engine/` permanece disponível para comparação e compatibilidade. Ele não é chamado pelo pipeline v2 para estimar momento, buscar ASTs, minerar com a perda antiga ou projetar gradientes em parâmetros. O v2 reutiliza apenas suas primitivas matemáticas e ativações já verificadas. A interface e integrações opcionais antigas estão documentadas em [LEGACY_V1.md](docs/LEGACY_V1.md); o comando `tools/live_demo.py` continua sendo a demonstração **v1**, não a do pipeline novo.
