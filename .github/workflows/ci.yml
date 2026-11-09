@@ -1,0 +1,23 @@
+name: Validate CNGE
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: python -m pip install -e '.[dev]'
+      - run: ruff check cnge_engine tests tools
+      - run: ruff format --check cnge_engine tests tools
+      - run: pytest -q
+      - run: cnge-demo --steps 1000
+      - run: python -m build
+      - run: python tools/export_source.py --output /tmp/CNGE_SOURCE.txt && cmp CNGE_SOURCE.txt /tmp/CNGE_SOURCE.txt
