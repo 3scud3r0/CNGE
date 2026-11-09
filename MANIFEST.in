@@ -1,0 +1,6 @@
+include README.md pyproject.toml CNGE_SOURCE.txt
+recursive-include docs *.md *.txt
+recursive-include tests *.py
+recursive-include tools *.py *.cjs
+recursive-include web *.html
+recursive-include .github *.yml

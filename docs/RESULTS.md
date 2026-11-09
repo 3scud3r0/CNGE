@@ -3,6 +3,7 @@
 Validação em CPU, Python 3.12, PyTorch 2.15.0+cpu. As versões efetivamente usadas estão em `VALIDATED_VERSIONS.txt`. Não havia CUDA disponível.
 
 - Suíte rápida: **36 testes aprovados**. Os três testes longos são ignorados explicitamente nessa invocação e executados em separado.
+- Suíte longa: **3 testes aprovados**, 150.000 passos no total, em **842,43 segundos**. Yoshida em Hénon–Heiles; midpoint em Hénon–Heiles e pêndulo duplo. Todos mantiveram o erro do mapa tangente simplético acumulado abaixo de **10⁻⁶**. A execução longa iniciou antes da adição de três testes rápidos; os 36 testes rápidos finais foram validados separadamente. Total: **39 testes aprovados**, sem falhas.
 - `ruff check` e `ruff format --check`: aprovados.
 - Compilação de bytecode (`compileall`) e `pip check`: aprovados.
 - Distribuições `sdist` e `wheel`: geradas com sucesso; smoke test de um wheel instalado fora do checkout aprovado.
@@ -13,3 +14,5 @@ Validação em CPU, Python 3.12, PyTorch 2.15.0+cpu. As versões efetivamente us
 - Modelo Hamiltoniano padrão d=2: 33.793 parâmetros. Modelo Noether padrão: 8.705 parâmetros.
 
 As integrações com câmera real, modelo fundacional baixado e CUDA não foram executadas. A CI foi configurada, mas uma execução remota só pode ser confirmada depois que o provedor a executar.
+
+Condições externas verificadas: acesso Git de leitura e escrita ao GitHub funcionou. A criação de PR foi tentada, mas o proxy respondeu `Forbidden` ao endpoint `https://api.github.com/graphql`; o domínio precisa ser liberado nas configurações de rede do ambiente antes de repetir `gh pr create`. O acesso ao arquivo de configuração de `BAAI/bge-m3` no Hugging Face também recebeu HTTP 403 do proxy, e não havia dispositivos `/dev/video*` disponíveis. Nenhuma dessas verificações estabelece validação das integrações opcionais.

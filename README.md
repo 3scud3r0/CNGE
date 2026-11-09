@@ -23,7 +23,7 @@ Em uma máquina CUDA, instale primeiro a distribuição de PyTorch adequada ao d
 ```bash
 .venv/bin/cnge-demo --steps 1000 --output artifacts/demo.json
 .venv/bin/pytest -q
-.venv/bin/pytest --long -m long -q  # três testes de 50.000 passos, execução mais demorada
+.venv/bin/pytest --long -m long -q  # três testes de 50.000 passos; cerca de 14 minutos nesta CPU
 .venv/bin/ruff check cnge_engine tests tools
 .venv/bin/ruff format --check cnge_engine tests tools
 .venv/bin/python -m build
